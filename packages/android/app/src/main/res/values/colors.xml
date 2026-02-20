@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+  <color name="oc_seed_primary">#DCDE8D</color>
+  <color name="oc_seed_secondary">#8E8B8B</color>
+  <color name="oc_seed_tertiary">#A753AE</color>
+
+  <color name="oc_light_bg">#F8F7F7</color>
+  <color name="oc_light_surface">#FCFCFC</color>
+  <color name="oc_light_outline">#D3CFCF</color>
+  <color name="oc_light_error">#FC533A</color>
+
+  <color name="oc_dark_bg">#151313</color>
+  <color name="oc_dark_surface">#1C1717</color>
+  <color name="oc_dark_outline">#4B4444</color>
+  <color name="oc_dark_error">#FC533A</color>
+</resources>

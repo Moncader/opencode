@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+  <string name="app_name">OpenCode</string>
+
+  <string name="notif_channel_sync">Connection</string>
+  <string name="notif_channel_agent">Agent updates</string>
+  <string name="notif_channel_attention">Needs attention</string>
+
+  <string name="notif_sync_title">OpenCode connected</string>
+  <string name="notif_sync_body">Listening for remote updates</string>
+
+  <string name="notif_turn_complete_title">Response ready</string>
+  <string name="notif_session_error_title">Session error</string>
+  <string name="notif_permission_title">Permission requested</string>
+  <string name="notif_question_title">Question requested</string>
+</resources>
