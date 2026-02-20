@@ -58,7 +58,15 @@ data class ModelDto(
   val family: String? = null,
   @SerialName("release_date")
   val releaseDate: String = "",
+  val limit: ModelLimitDto? = null,
   val variants: Map<String, JsonObject>? = null,
+)
+
+@Serializable
+data class ModelLimitDto(
+  val context: Int? = null,
+  val input: Int? = null,
+  val output: Int? = null,
 )
 
 @Serializable
@@ -236,6 +244,37 @@ data class FileNodeDto(
 data class FileContentDto(
   val type: String,
   val content: String,
+  val diff: String? = null,
+  val patch: FilePatchDto? = null,
+  val encoding: String? = null,
+  val mimeType: String? = null,
+)
+
+@Serializable
+data class FilePatchDto(
+  val oldFileName: String,
+  val newFileName: String,
+  val oldHeader: String? = null,
+  val newHeader: String? = null,
+  val hunks: List<FilePatchHunkDto> = emptyList(),
+  val index: String? = null,
+)
+
+@Serializable
+data class FilePatchHunkDto(
+  val oldStart: Int,
+  val oldLines: Int,
+  val newStart: Int,
+  val newLines: Int,
+  val lines: List<String> = emptyList(),
+)
+
+@Serializable
+data class FileStatusDto(
+  val path: String,
+  val added: Int,
+  val removed: Int,
+  val status: String,
 )
 
 @Serializable
@@ -276,6 +315,17 @@ data class CreateSessionRequestDto(
   @SerialName("parentID")
   val parentId: String? = null,
   val title: String? = null,
+)
+
+@Serializable
+data class UpdateSessionRequestDto(
+  val title: String? = null,
+  val time: UpdateSessionTimeDto? = null,
+)
+
+@Serializable
+data class UpdateSessionTimeDto(
+  val archived: Long? = null,
 )
 
 @Serializable

@@ -6,6 +6,8 @@ import ai.opencode.android.core.network.OpenCodePtySocket
 import ai.opencode.android.core.network.OpenCodeSseClient
 import ai.opencode.android.core.repo.OpenCodeRepository
 import ai.opencode.android.core.storage.ServerStore
+import ai.opencode.android.core.storage.UiPrefsStore
+import ai.opencode.android.ui.theme.OpenCodeThemeCatalog
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -40,6 +42,8 @@ class AppGraph(app: Application) {
     .build()
 
   private val store = ServerStore(app)
+  val uiStore = UiPrefsStore(app)
+  val themeCatalog = OpenCodeThemeCatalog(app)
   private val api = OpenCodeApiFactory(client = client, json = json)
   private val sse = OpenCodeSseClient(client = client, json = json)
   private val pty = OpenCodePtySocket(client = client)

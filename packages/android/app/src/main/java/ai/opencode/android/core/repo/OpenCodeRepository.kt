@@ -2,6 +2,8 @@ package ai.opencode.android.core.repo
 
 import ai.opencode.android.core.model.AgentDto
 import ai.opencode.android.core.model.ConfigDto
+import ai.opencode.android.core.model.FileDiffDto
+import ai.opencode.android.core.model.FileStatusDto
 import ai.opencode.android.core.model.GlobalEventDto
 import ai.opencode.android.core.model.HealthDto
 import ai.opencode.android.core.model.ModelRef
@@ -455,6 +457,80 @@ class OpenCodeRepository(
     return runCatching { api.fileRead(path) }.getOrNull()
   }
 
+  suspend fun fileStatus(directory: String): List<FileStatusDto> {
+    val url = internal.value.activeServer ?: return emptyList()
+    val api = apiFactory.scoped(url, directory)
+    return runCatching { api.fileStatus() }.getOrElse { emptyList() }
+  }
+
+  suspend fun sessionDiff(directory: String, sessionId: String, messageId: String? = null): List<FileDiffDto> {
+    val url = internal.value.activeServer ?: return emptyList()
+    val api = apiFactory.scoped(url, directory)
+    return runCatching { api.sessionDiff(sessionId = sessionId, messageId = messageId) }.getOrElse { emptyList() }
+  }
+
+  suspend fun deleteSession(directory: String, sessionId: String): Boolean {
+    val url = internal.value.activeServer ?: return false
+    val api = apiFactory.scoped(url, directory)
+    return runCatching {
+      api.sessionDelete(sessionId)
+    }.map {
+      internal.update { cur ->
+        val sessions = cur.sync.sessionsByDirectory[directory].orEmpty().filterNot { it.id == sessionId }
+        val sync = removeSessionState(
+          sync = cur.sync.copy(sessionsByDirectory = cur.sync.sessionsByDirectory + (directory to sessions)),
+          sessionId = sessionId,
+        )
+        val active = if (cur.activeSessionId == sessionId) null else cur.activeSessionId
+        cur.copy(sync = sync, activeSessionId = active, error = null)
+      }
+      true
+    }.getOrElse { err ->
+      internal.update { it.copy(error = err.message ?: "Failed to delete session") }
+      false
+    }
+  }
+
+  suspend fun archiveSession(directory: String, sessionId: String): Boolean {
+    val url = internal.value.activeServer ?: return false
+    val api = apiFactory.scoped(url, directory)
+    return runCatching {
+      api.sessionUpdate(sessionId = sessionId, archived = System.currentTimeMillis())
+    }.map {
+      internal.update { cur ->
+        val sessions = cur.sync.sessionsByDirectory[directory].orEmpty().filterNot { item -> item.id == sessionId }
+        val sync = removeSessionState(
+          sync = cur.sync.copy(sessionsByDirectory = cur.sync.sessionsByDirectory + (directory to sessions)),
+          sessionId = sessionId,
+        )
+        val active = if (cur.activeSessionId == sessionId) null else cur.activeSessionId
+        cur.copy(sync = sync, activeSessionId = active, error = null)
+      }
+      true
+    }.getOrElse { err ->
+      internal.update { it.copy(error = err.message ?: "Failed to archive session") }
+      false
+    }
+  }
+
+  suspend fun probeServer(url: String): Boolean {
+    val api = apiFactory.base(url)
+    return runCatching { api.globalHealth().healthy }.getOrElse { false }
+  }
+
+  suspend fun findProjectDirectories(query: String, limit: Int = 30): List<String> {
+    val url = internal.value.activeServer ?: return emptyList()
+    val api = apiFactory.base(url)
+    return runCatching {
+      api.findFiles(
+        queryValue = query,
+        dirs = true,
+        type = "directory",
+        limit = limit,
+      )
+    }.getOrElse { emptyList() }
+  }
+
   fun selectModel(model: ModelRef?) {
     internal.update { it.copy(selectedModel = model, selectedVariant = null) }
   }
@@ -500,6 +576,21 @@ class OpenCodeRepository(
     val idx = list.indexOfFirst { it.id == session.id }
     if (idx == -1) return (list + session).sortedBy { it.id }
     return list.toMutableList().also { it[idx] = session }.sortedBy { it.id }
+  }
+
+  private fun removeSessionState(sync: SyncState, sessionId: String): SyncState {
+    val messages = sync.messagesBySession[sessionId].orEmpty()
+    val part = sync.partsByMessage.toMutableMap().also { map ->
+      messages.forEach { map.remove(it.id) }
+    }
+    return sync.copy(
+      messagesBySession = sync.messagesBySession - sessionId,
+      partsByMessage = part,
+      sessionDiffBySession = sync.sessionDiffBySession - sessionId,
+      todoBySession = sync.todoBySession - sessionId,
+      permissionBySession = sync.permissionBySession - sessionId,
+      questionBySession = sync.questionBySession - sessionId,
+    )
   }
 
   private fun groupSessionMessages(

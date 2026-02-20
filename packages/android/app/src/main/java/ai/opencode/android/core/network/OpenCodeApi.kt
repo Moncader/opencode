@@ -7,6 +7,7 @@ import ai.opencode.android.core.model.CreateSessionResponseDto
 import ai.opencode.android.core.model.FileContentDto
 import ai.opencode.android.core.model.FileDiffDto
 import ai.opencode.android.core.model.FileNodeDto
+import ai.opencode.android.core.model.FileStatusDto
 import ai.opencode.android.core.model.HealthDto
 import ai.opencode.android.core.model.MessageDto
 import ai.opencode.android.core.model.ModelRef
@@ -25,6 +26,8 @@ import ai.opencode.android.core.model.SessionDto
 import ai.opencode.android.core.model.SessionMessageBundleDto
 import ai.opencode.android.core.model.SessionStatusDto
 import ai.opencode.android.core.model.TodoDto
+import ai.opencode.android.core.model.UpdateSessionRequestDto
+import ai.opencode.android.core.model.UpdateSessionTimeDto
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 import kotlinx.serialization.builtins.ListSerializer
@@ -111,6 +114,23 @@ class OpenCodeApi(
     return get("/session/$sessionId", SessionDto.serializer())
   }
 
+  suspend fun sessionDelete(sessionId: String) {
+    val request = request(method = "DELETE", path = "/session/$sessionId")
+    executeUnit(request)
+  }
+
+  suspend fun sessionUpdate(sessionId: String, title: String? = null, archived: Long? = null): SessionDto {
+    return post(
+      "/session/$sessionId",
+      UpdateSessionRequestDto(
+        title = title,
+        time = if (archived == null) null else UpdateSessionTimeDto(archived = archived),
+      ),
+      UpdateSessionRequestDto.serializer(),
+      SessionDto.serializer(),
+    )
+  }
+
   suspend fun sessionStatus(): Map<String, SessionStatusDto> {
     return get(
       "/session/status",
@@ -159,10 +179,11 @@ class OpenCodeApi(
     )
   }
 
-  suspend fun sessionDiff(sessionId: String): List<FileDiffDto> {
+  suspend fun sessionDiff(sessionId: String, messageId: String? = null): List<FileDiffDto> {
     return get(
       "/session/$sessionId/diff",
       ListSerializer(FileDiffDto.serializer()),
+      query = mapOf("messageID" to messageId),
     )
   }
 
@@ -213,6 +234,13 @@ class OpenCodeApi(
       "/file/content",
       FileContentDto.serializer(),
       query = mapOf("path" to path),
+    )
+  }
+
+  suspend fun fileStatus(): List<FileStatusDto> {
+    return get(
+      "/file/status",
+      ListSerializer(FileStatusDto.serializer()),
     )
   }
 
