@@ -21,6 +21,11 @@ data class PathDto(
 )
 
 @Serializable
+data class VcsInfoDto(
+  val branch: String,
+)
+
+@Serializable
 data class ProjectDto(
   val id: String,
   val worktree: String,

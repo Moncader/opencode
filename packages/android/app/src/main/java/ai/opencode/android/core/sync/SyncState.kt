@@ -9,6 +9,7 @@ import ai.opencode.android.core.model.QuestionRequestDto
 import ai.opencode.android.core.model.SessionDto
 import ai.opencode.android.core.model.SessionStatusDto
 import ai.opencode.android.core.model.TodoDto
+import ai.opencode.android.core.model.VcsInfoDto
 
 data class SyncState(
   val projects: List<ProjectDto> = emptyList(),
@@ -20,4 +21,5 @@ data class SyncState(
   val todoBySession: Map<String, List<TodoDto>> = emptyMap(),
   val permissionBySession: Map<String, List<PermissionRequestDto>> = emptyMap(),
   val questionBySession: Map<String, List<QuestionRequestDto>> = emptyMap(),
+  val vcsByDirectory: Map<String, VcsInfoDto> = emptyMap(),
 )

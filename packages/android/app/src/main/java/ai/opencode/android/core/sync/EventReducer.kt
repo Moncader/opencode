@@ -10,6 +10,7 @@ import ai.opencode.android.core.model.QuestionRequestDto
 import ai.opencode.android.core.model.SessionDto
 import ai.opencode.android.core.model.SessionStatusDto
 import ai.opencode.android.core.model.TodoDto
+import ai.opencode.android.core.model.VcsInfoDto
 import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
@@ -154,6 +155,13 @@ class EventReducer(private val json: Json) {
         val requestId = props.string("requestID") ?: return state
         val current = state.questionBySession[sessionId].orEmpty().filterNot { it.id == requestId }
         state.copy(questionBySession = state.questionBySession + (sessionId to current))
+      }
+
+      "vcs.branch.updated" -> {
+        val branch = props.string("branch") ?: return state
+        val current = state.vcsByDirectory[directory]
+        if (current?.branch == branch) return state
+        state.copy(vcsByDirectory = state.vcsByDirectory + (directory to VcsInfoDto(branch = branch)))
       }
 
       else -> state
