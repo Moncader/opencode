@@ -51,6 +51,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.ArrowBack
@@ -112,10 +113,14 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
@@ -153,6 +158,8 @@ fun MainScreen(
   onSelectAgent: (String?) -> Unit,
   onSelectVariant: (String?) -> Unit,
   onSelectSessionTab: (SessionTab) -> Unit,
+  onOpenTerminal: () -> Unit,
+  onRunTerminalCommand: (String) -> Unit,
   onSelectReviewScope: (ReviewScope) -> Unit,
   onSelectFilesMode: (FilesMode) -> Unit,
   onToggleDirectory: (String) -> Unit,
@@ -168,6 +175,7 @@ fun MainScreen(
   var showContextDetails by rememberSaveable { mutableStateOf(false) }
   var prompt by rememberSaveable { mutableStateOf("") }
   var sessionsProject by rememberSaveable { mutableStateOf<String?>(null) }
+  var projectTerminalOpen by rememberSaveable { mutableStateOf(false) }
   var promptScrollTick by rememberSaveable { mutableStateOf(0) }
 
   val ui = LocalOpenCodeColors.current
@@ -320,6 +328,10 @@ fun MainScreen(
             onHideProject = onHideProject,
             onCreateSession = onCreateSession,
             onOpenSession = onOpenSession,
+            onOpenTerminal = {
+              onOpenTerminal()
+              projectTerminalOpen = true
+            },
             onShowAllSessions = { sessionsProject = it },
           )
         }
@@ -358,6 +370,10 @@ fun MainScreen(
               expandedDirs = state.expandedDirs,
               changedFiles = state.changedFiles,
               onSelectTab = onSelectSessionTab,
+              terminalConnected = state.repo.terminalConnected,
+              terminalOutput = state.repo.terminalOutput,
+              onOpenTerminal = onOpenTerminal,
+              onRunTerminalCommand = onRunTerminalCommand,
               onSelectReviewScope = onSelectReviewScope,
               onSelectFilesMode = onSelectFilesMode,
               onToggleDirectory = onToggleDirectory,
@@ -436,6 +452,23 @@ fun MainScreen(
       onDelete = onDeleteSession,
       onArchive = onArchiveSession,
       onDismiss = { sessionsProject = null },
+    )
+  }
+
+  LaunchedEffect(state.stage) {
+    if (state.stage != AppStage.Projects) {
+      projectTerminalOpen = false
+    }
+  }
+
+  if (projectTerminalOpen && state.stage == AppStage.Projects && directory != null) {
+    ProjectTerminalSheet(
+      project = directory,
+      connected = state.repo.terminalConnected,
+      output = state.repo.terminalOutput,
+      onReconnect = onOpenTerminal,
+      onRunCommand = onRunTerminalCommand,
+      onDismiss = { projectTerminalOpen = false },
     )
   }
 }
@@ -607,6 +640,7 @@ private fun ProjectScreen(
   onHideProject: (String) -> Unit,
   onCreateSession: () -> Unit,
   onOpenSession: (String) -> Unit,
+  onOpenTerminal: () -> Unit,
   onShowAllSessions: (String) -> Unit,
 ) {
   val ui = LocalOpenCodeColors.current
@@ -702,6 +736,7 @@ private fun ProjectScreen(
           onHide = { onHideProject(worktree) },
           onCreateSession = onCreateSession,
           onOpenSession = onOpenSession,
+          onOpenTerminal = onOpenTerminal,
           onShowAll = { onShowAllSessions(worktree) },
         )
       }
@@ -722,6 +757,7 @@ private fun ProjectSection(
   onHide: () -> Unit,
   onCreateSession: () -> Unit,
   onOpenSession: (String) -> Unit,
+  onOpenTerminal: () -> Unit,
   onShowAll: () -> Unit,
 ) {
   val ui = LocalOpenCodeColors.current
@@ -770,6 +806,11 @@ private fun ProjectSection(
           Icon(Icons.Rounded.Add, contentDescription = null, modifier = Modifier.size(16.dp))
           Spacer(Modifier.width(6.dp))
           Text("New session")
+        }
+        OutlinedButton(onClick = onOpenTerminal, enabled = selected) {
+          Icon(Icons.Rounded.Code, contentDescription = null, modifier = Modifier.size(16.dp))
+          Spacer(Modifier.width(6.dp))
+          Text("Terminal")
         }
         OutlinedButton(onClick = {
           if (confirmHide) {
@@ -886,6 +927,10 @@ private fun SessionScreen(
   expandedDirs: Set<String>,
   changedFiles: List<FileStatusDto>,
   onSelectTab: (SessionTab) -> Unit,
+  terminalConnected: Boolean,
+  terminalOutput: String,
+  onOpenTerminal: () -> Unit,
+  onRunTerminalCommand: (String) -> Unit,
   onSelectReviewScope: (ReviewScope) -> Unit,
   onSelectFilesMode: (FilesMode) -> Unit,
   onToggleDirectory: (String) -> Unit,
@@ -941,6 +986,17 @@ private fun SessionScreen(
         )
       }
 
+      SessionTab.Terminal -> {
+        TerminalPanel(
+          title = "Session terminal",
+          subtitle = directory,
+          connected = terminalConnected,
+          output = terminalOutput,
+          onReconnect = onOpenTerminal,
+          onRunCommand = onRunTerminalCommand,
+        )
+      }
+
       SessionTab.Review -> {
         ReviewPanel(
           todos = todos,
@@ -987,10 +1043,15 @@ private fun ContextCircle(usage: Int, onOpen: () -> Unit) {
 
 @Composable
 private fun SessionTabs(tab: SessionTab, onSelect: (SessionTab) -> Unit) {
-  Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-    SessionTabButton(active = tab == SessionTab.Chat, label = "Chat") { onSelect(SessionTab.Chat) }
-    SessionTabButton(active = tab == SessionTab.Review, label = "Review") { onSelect(SessionTab.Review) }
-    SessionTabButton(active = tab == SessionTab.Files, label = "Files") { onSelect(SessionTab.Files) }
+  Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+      SessionTabButton(active = tab == SessionTab.Chat, label = "Chat") { onSelect(SessionTab.Chat) }
+      SessionTabButton(active = tab == SessionTab.Terminal, label = "Terminal") { onSelect(SessionTab.Terminal) }
+    }
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+      SessionTabButton(active = tab == SessionTab.Review, label = "Review") { onSelect(SessionTab.Review) }
+      SessionTabButton(active = tab == SessionTab.Files, label = "Files") { onSelect(SessionTab.Files) }
+    }
   }
 }
 
@@ -1712,6 +1773,144 @@ private fun FilesPanel(
             overflow = TextOverflow.Ellipsis,
             style = MaterialTheme.typography.bodySmall,
           )
+        }
+      }
+    }
+  }
+}
+
+@Composable
+@OptIn(ExperimentalMaterial3Api::class)
+private fun ProjectTerminalSheet(
+  project: String,
+  connected: Boolean,
+  output: String,
+  onReconnect: () -> Unit,
+  onRunCommand: (String) -> Unit,
+  onDismiss: () -> Unit,
+) {
+  ModalBottomSheet(
+    onDismissRequest = onDismiss,
+    dragHandle = null,
+  ) {
+    Column(
+      modifier = Modifier
+        .fillMaxWidth()
+        .padding(horizontal = 12.dp, vertical = 10.dp)
+        .navigationBarsPadding(),
+      verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+      TerminalPanel(
+        title = "Project terminal",
+        subtitle = project,
+        connected = connected,
+        output = output,
+        onReconnect = onReconnect,
+        onRunCommand = onRunCommand,
+      )
+    }
+  }
+}
+
+@Composable
+private fun TerminalPanel(
+  title: String,
+  subtitle: String,
+  connected: Boolean,
+  output: String,
+  onReconnect: () -> Unit,
+  onRunCommand: (String) -> Unit,
+) {
+  val ui = LocalOpenCodeColors.current
+  var command by rememberSaveable(subtitle) { mutableStateOf("") }
+  val scroll = rememberScrollState()
+
+  LaunchedEffect(output.length) {
+    scroll.scrollTo(scroll.maxValue)
+  }
+
+  Card(
+    colors = CardDefaults.cardColors(containerColor = ui.panel),
+    border = BorderStroke(1.dp, ui.borderSubtle),
+    modifier = Modifier.fillMaxSize(),
+  ) {
+    Column(
+      modifier = Modifier
+        .fillMaxSize()
+        .padding(12.dp),
+      verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+      ) {
+        Column(modifier = Modifier.weight(1f)) {
+          Text(title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+          Text(subtitle, style = MaterialTheme.typography.labelSmall, color = ui.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+          StatusDot(status = if (connected) ServerProbe.Online else ServerProbe.Offline)
+          Text(if (connected) "Connected" else "Disconnected", style = MaterialTheme.typography.labelSmall, color = ui.textMuted)
+          OutlinedButton(onClick = onReconnect) {
+            Text(if (connected) "Reconnect" else "Connect")
+          }
+        }
+      }
+
+      Card(
+        modifier = Modifier.weight(1f),
+        colors = CardDefaults.cardColors(containerColor = ui.diffContextBg),
+        border = BorderStroke(1.dp, ui.borderSubtle),
+      ) {
+        val rendered = remember(output) { terminalOutput(output) }
+        Box(
+          modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(scroll)
+            .padding(8.dp),
+        ) {
+          if (output.isBlank()) {
+            Text(
+              text = "Terminal output will appear here.",
+              style = MaterialTheme.typography.bodySmall,
+              fontFamily = FontFamily.Monospace,
+              color = ui.textMuted,
+            )
+          } else {
+            Text(
+              text = rendered,
+              style = MaterialTheme.typography.bodySmall,
+              fontFamily = FontFamily.Monospace,
+              color = ui.markdownCode,
+            )
+          }
+        }
+      }
+
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+      ) {
+        OutlinedTextField(
+          value = command,
+          onValueChange = { command = it },
+          singleLine = true,
+          label = { Text("Run command") },
+          keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.None),
+          modifier = Modifier.weight(1f),
+        )
+        Button(
+          onClick = {
+            val next = command.trim()
+            if (next.isEmpty()) return@Button
+            onRunCommand(next)
+            command = ""
+          },
+          enabled = command.isNotBlank(),
+        ) {
+          Text("Run")
         }
       }
     }
@@ -2485,6 +2684,399 @@ private fun diffRows(before: String, after: String): List<DiffRow> {
   }
 
   return out
+}
+
+private data class TermStyle(
+  val fg: Color? = null,
+  val bg: Color? = null,
+  val bold: Boolean = false,
+  val dim: Boolean = false,
+  val underline: Boolean = false,
+)
+
+private data class Glyph(
+  val value: Char,
+  val style: TermStyle,
+)
+
+private fun terminalOutput(raw: String): AnnotatedString {
+  if (raw.isEmpty()) return AnnotatedString("")
+
+  val base = TermStyle()
+  val lines = mutableListOf<MutableList<Glyph>>(mutableListOf())
+  var row = 0
+  var col = 0
+  var style = base
+  var saved: Pair<Int, Int>? = null
+
+  fun ensureRow(next: Int) {
+    while (lines.size <= next) {
+      lines.add(mutableListOf())
+    }
+  }
+
+  fun fill(line: MutableList<Glyph>, limit: Int) {
+    while (line.size < limit) {
+      line += Glyph(value = ' ', style = base)
+    }
+  }
+
+  fun put(value: Char) {
+    ensureRow(row)
+    val line = lines[row]
+    fill(line, col)
+    if (col < line.size) {
+      line[col] = Glyph(value = value, style = style)
+    } else {
+      line += Glyph(value = value, style = style)
+    }
+    col += 1
+  }
+
+  fun eraseLine(mode: Int) {
+    ensureRow(row)
+    val line = lines[row]
+    if (mode == 2) {
+      line.clear()
+      col = 0
+      return
+    }
+    if (mode == 1) {
+      if (line.isEmpty()) return
+      val end = minOf(col, line.lastIndex)
+      for (index in 0..end) {
+        line[index] = Glyph(value = ' ', style = base)
+      }
+      return
+    }
+    if (col >= line.size) return
+    line.subList(col, line.size).clear()
+  }
+
+  fun eraseScreen(mode: Int) {
+    if (mode == 2) {
+      lines.clear()
+      lines.add(mutableListOf())
+      row = 0
+      col = 0
+      return
+    }
+    ensureRow(row)
+    eraseLine(0)
+    if (row + 1 >= lines.size) return
+    lines.subList(row + 1, lines.size).clear()
+  }
+
+  fun parse(param: String): List<Int?> {
+    if (param.isEmpty()) return emptyList()
+    return param.split(';').map { item ->
+      if (item.isBlank()) return@map null
+      item.trimStart('?').toIntOrNull()
+    }
+  }
+
+  fun color(code: Int): Color {
+    if (code < 16) {
+      val list = listOf(
+        "#000000",
+        "#800000",
+        "#008000",
+        "#808000",
+        "#000080",
+        "#800080",
+        "#008080",
+        "#c0c0c0",
+        "#808080",
+        "#ff0000",
+        "#00ff00",
+        "#ffff00",
+        "#0000ff",
+        "#ff00ff",
+        "#00ffff",
+        "#ffffff",
+      )
+      return hexColor(list.getOrNull(code) ?: "#000000")
+    }
+    if (code < 232) {
+      val index = code - 16
+      val b = index % 6
+      val g = (index / 6) % 6
+      val r = index / 36
+      val unit = { x: Int -> if (x == 0) 0 else x * 40 + 55 }
+      return Color(unit(r), unit(g), unit(b))
+    }
+    val gray = ((code - 232) * 10 + 8).coerceIn(0, 255)
+    return Color(gray, gray, gray)
+  }
+
+  fun applySgr(list: List<Int?>) {
+    if (list.isEmpty()) {
+      style = base
+      return
+    }
+    var index = 0
+    while (index < list.size) {
+      val value = list[index] ?: 0
+      if (value == 0) {
+        style = base
+        index += 1
+        continue
+      }
+      if (value == 1) {
+        style = style.copy(bold = true)
+        index += 1
+        continue
+      }
+      if (value == 2) {
+        style = style.copy(dim = true)
+        index += 1
+        continue
+      }
+      if (value == 4) {
+        style = style.copy(underline = true)
+        index += 1
+        continue
+      }
+      if (value == 22) {
+        style = style.copy(bold = false, dim = false)
+        index += 1
+        continue
+      }
+      if (value == 24) {
+        style = style.copy(underline = false)
+        index += 1
+        continue
+      }
+      if (value in 30..37) {
+        style = style.copy(fg = color(value - 30))
+        index += 1
+        continue
+      }
+      if (value == 39) {
+        style = style.copy(fg = null)
+        index += 1
+        continue
+      }
+      if (value in 90..97) {
+        style = style.copy(fg = color(value - 90 + 8))
+        index += 1
+        continue
+      }
+      if (value in 40..47) {
+        style = style.copy(bg = color(value - 40))
+        index += 1
+        continue
+      }
+      if (value == 49) {
+        style = style.copy(bg = null)
+        index += 1
+        continue
+      }
+      if (value in 100..107) {
+        style = style.copy(bg = color(value - 100 + 8))
+        index += 1
+        continue
+      }
+      if (value == 38 || value == 48) {
+        val targetFg = value == 38
+        val mode = list.getOrNull(index + 1)
+        if (mode == 5) {
+          val next = list.getOrNull(index + 2)
+          if (next != null) {
+            val mapped = color(next.coerceIn(0, 255))
+            style = if (targetFg) style.copy(fg = mapped) else style.copy(bg = mapped)
+          }
+          index += 3
+          continue
+        }
+        if (mode == 2) {
+          val r = list.getOrNull(index + 2) ?: 0
+          val g = list.getOrNull(index + 3) ?: 0
+          val b = list.getOrNull(index + 4) ?: 0
+          val mapped = Color(r.coerceIn(0, 255), g.coerceIn(0, 255), b.coerceIn(0, 255))
+          style = if (targetFg) style.copy(fg = mapped) else style.copy(bg = mapped)
+          index += 5
+          continue
+        }
+      }
+      index += 1
+    }
+  }
+
+  var index = 0
+  while (index < raw.length) {
+    val value = raw[index]
+
+    if (value == '\u001B') {
+      if (index + 1 >= raw.length) break
+      val marker = raw[index + 1]
+
+      if (marker == ']') {
+        var end = index + 2
+        while (end < raw.length) {
+          val cur = raw[end]
+          if (cur == '\u0007') {
+            end += 1
+            break
+          }
+          if (cur == '\u001B' && end + 1 < raw.length && raw[end + 1] == '\\') {
+            end += 2
+            break
+          }
+          end += 1
+        }
+        index = end
+        continue
+      }
+
+      if (marker == '[') {
+        var end = index + 2
+        while (end < raw.length && raw[end] !in '@'..'~') {
+          end += 1
+        }
+        if (end >= raw.length) break
+
+        val cmd = raw[end]
+        val list = parse(raw.substring(index + 2, end))
+        val first = list.firstOrNull() ?: 1
+
+        if (cmd == 'm') applySgr(list)
+        if (cmd == 'K') eraseLine((list.firstOrNull() ?: 0))
+        if (cmd == 'J') eraseScreen((list.firstOrNull() ?: 0))
+        if (cmd == 'A') row = maxOf(0, row - maxOf(first, 1))
+        if (cmd == 'B') {
+          row += maxOf(first, 1)
+          ensureRow(row)
+        }
+        if (cmd == 'C') col += maxOf(first, 1)
+        if (cmd == 'D') col = maxOf(0, col - maxOf(first, 1))
+        if (cmd == 'G') col = maxOf(0, first - 1)
+        if (cmd == 'H' || cmd == 'f') {
+          row = maxOf((list.getOrNull(0) ?: 1) - 1, 0)
+          col = maxOf((list.getOrNull(1) ?: 1) - 1, 0)
+          ensureRow(row)
+        }
+        if (cmd == 's') saved = row to col
+        if (cmd == 'u') {
+          val next = saved
+          if (next != null) {
+            row = next.first
+            col = next.second
+            ensureRow(row)
+          }
+        }
+
+        index = end + 1
+        continue
+      }
+
+      if (marker == '7') {
+        saved = row to col
+        index += 2
+        continue
+      }
+      if (marker == '8') {
+        val next = saved
+        if (next != null) {
+          row = next.first
+          col = next.second
+          ensureRow(row)
+        }
+        index += 2
+        continue
+      }
+
+      index += 2
+      continue
+    }
+
+    if (value == '\n') {
+      row += 1
+      col = 0
+      ensureRow(row)
+      index += 1
+      continue
+    }
+    if (value == '\r') {
+      col = 0
+      index += 1
+      continue
+    }
+    if (value == '\b') {
+      col = maxOf(0, col - 1)
+      index += 1
+      continue
+    }
+    if (value == '\t') {
+      val stop = ((col / 8) + 1) * 8
+      while (col < stop) {
+        put(' ')
+      }
+      index += 1
+      continue
+    }
+    if (value.code < 32) {
+      index += 1
+      continue
+    }
+
+    put(value)
+    index += 1
+  }
+
+  fun span(item: TermStyle): SpanStyle {
+    val color = if (item.dim) item.fg?.copy(alpha = 0.72f) else item.fg
+    return SpanStyle(
+      color = color ?: Color.Unspecified,
+      background = item.bg ?: Color.Unspecified,
+      fontWeight = if (item.bold) FontWeight.SemiBold else null,
+      textDecoration = if (item.underline) TextDecoration.Underline else null,
+    )
+  }
+
+  val output = buildAnnotatedString {
+    var run: TermStyle? = null
+    var start = 0
+
+    fun flush(limit: Int) {
+      val item = run ?: return
+      if (item == base) return
+      addStyle(span(item), start, limit)
+    }
+
+    lines.forEachIndexed { lineIndex, line ->
+      line.forEach { item ->
+        if (run == null) {
+          run = item.style
+          start = length
+        }
+        if (run != null && run != item.style) {
+          flush(length)
+          run = item.style
+          start = length
+        }
+        append(item.value)
+      }
+
+      if (lineIndex >= lines.lastIndex) return@forEachIndexed
+      flush(length)
+      run = null
+      append('\n')
+    }
+
+    flush(length)
+  }
+
+  return output
+}
+
+private fun hexColor(input: String): Color {
+  val value = input.removePrefix("#")
+  if (value.length != 6) return Color.Unspecified
+  val r = value.substring(0, 2).toIntOrNull(16) ?: return Color.Unspecified
+  val g = value.substring(2, 4).toIntOrNull(16) ?: return Color.Unspecified
+  val b = value.substring(4, 6).toIntOrNull(16) ?: return Color.Unspecified
+  return Color(r, g, b)
 }
 
 private fun flattenTree(fileTree: Map<String, List<FileNodeDto>>, expanded: Set<String>): List<FileRow> {

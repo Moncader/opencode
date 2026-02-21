@@ -37,6 +37,7 @@ enum class AppStage {
 
 enum class SessionTab {
   Chat,
+  Terminal,
   Review,
   Files,
 }
@@ -195,6 +196,12 @@ class MainVm(
   }
 
   fun showServerScreen() {
+    val dir = ui.value.selectedProject
+    if (dir != null) {
+      viewModelScope.launch {
+        repo.terminalClose(dir)
+      }
+    }
     ui.update { it.copy(stage = AppStage.Servers) }
   }
 
@@ -260,6 +267,7 @@ class MainVm(
     viewModelScope.launch {
       uiStore.hideProject(server, directory)
       if (ui.value.selectedProject == directory) {
+        repo.terminalClose(directory)
         repo.closeSession()
         ui.update { resetSessionPanels(it.copy(selectedProject = null, stage = AppStage.Projects)) }
       }
@@ -357,6 +365,12 @@ class MainVm(
   fun selectSessionTab(value: SessionTab) {
     ui.update { it.copy(sessionTab = value) }
     val dir = ui.value.selectedProject ?: return
+    if (value == SessionTab.Terminal) {
+      viewModelScope.launch {
+        repo.terminalOpen(dir)
+      }
+      return
+    }
     if (value == SessionTab.Files) {
       viewModelScope.launch {
         if (ui.value.filesMode == FilesMode.Changes) {
@@ -451,6 +465,23 @@ class MainVm(
       if (dir != null) repo.terminalClose(dir)
       repo.closeSession()
       ui.update { it.copy(stage = AppStage.Projects, sessionTab = SessionTab.Chat) }
+    }
+  }
+
+  fun openTerminal() {
+    val dir = ui.value.selectedProject ?: return
+    viewModelScope.launch {
+      repo.terminalOpen(dir)
+    }
+  }
+
+  fun runTerminalCommand(command: String) {
+    val dir = ui.value.selectedProject ?: return
+    viewModelScope.launch {
+      if (repo.state.value.terminalPtyId == null) {
+        repo.terminalOpen(dir)
+      }
+      repo.terminalRunCommand(command)
     }
   }
 

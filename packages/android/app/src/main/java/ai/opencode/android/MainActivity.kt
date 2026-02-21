@@ -77,6 +77,8 @@ class MainActivity : ComponentActivity() {
           onSelectAgent = vm::selectAgent,
           onSelectVariant = vm::selectVariant,
           onSelectSessionTab = vm::selectSessionTab,
+          onOpenTerminal = vm::openTerminal,
+          onRunTerminalCommand = vm::runTerminalCommand,
           onSelectReviewScope = vm::selectReviewScope,
           onSelectFilesMode = vm::selectFilesMode,
           onToggleDirectory = vm::toggleDirectory,
