@@ -85,7 +85,6 @@ class MainActivity : ComponentActivity() {
           onOpenFile = vm::openFile,
           onCloseFilePreview = vm::closeFilePreview,
           onCloseSession = vm::closeSession,
-          onRefresh = vm::refresh,
           onSetTheme = vm::setTheme,
           onSetThemeMode = vm::setThemeMode,
           onMarkSessionSeen = vm::markSessionSeen,

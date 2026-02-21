@@ -15,6 +15,7 @@ import ai.opencode.android.core.model.SessionDto
 import ai.opencode.android.core.model.TodoDto
 import ai.opencode.android.core.network.PromptAttachment
 import ai.opencode.android.ui.theme.LocalOpenCodeColors
+import ai.opencode.android.ui.theme.OpenCodeUiColors
 import ai.opencode.android.ui.theme.ThemeMode
 import android.content.Context
 import android.graphics.Color as AndroidColor
@@ -26,6 +27,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts.OpenDocument
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.basicMarquee
@@ -48,8 +50,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
@@ -73,7 +75,6 @@ import androidx.compose.material.icons.rounded.FolderOpen
 import androidx.compose.material.icons.rounded.Image
 import androidx.compose.material.icons.rounded.InsertDriveFile
 import androidx.compose.material.icons.rounded.MoreVert
-import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Send
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.WarningAmber
@@ -83,14 +84,13 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.Divider
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.FloatingActionButton
-import androidx.compose.material3.Icon
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
@@ -98,13 +98,15 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
@@ -124,7 +126,9 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.style.TextDecoration
@@ -133,7 +137,11 @@ import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import kotlinx.coroutines.delay
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.intOrNull
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -175,7 +183,6 @@ fun MainScreen(
   onOpenFile: (String) -> Unit,
   onCloseFilePreview: () -> Unit,
   onCloseSession: () -> Unit,
-  onRefresh: () -> Unit,
   onSetTheme: (String) -> Unit,
   onSetThemeMode: (ThemeMode) -> Unit,
   onMarkSessionSeen: (String) -> Unit,
@@ -188,6 +195,7 @@ fun MainScreen(
   var projectTerminalProject by rememberSaveable { mutableStateOf<String?>(null) }
   var projectPathOpen by rememberSaveable { mutableStateOf(false) }
   var promptScrollTick by rememberSaveable { mutableStateOf(0) }
+  var sessionInfoOpen by rememberSaveable { mutableStateOf(false) }
 
   val ui = LocalOpenCodeColors.current
   val context = LocalContext.current
@@ -210,6 +218,33 @@ fun MainScreen(
     val type = state.repo.sync.sessionStatusByDirectory[directory]?.get(sessionId)?.type?.lowercase(Locale.getDefault())
     type == "busy" || type == "running" || type == "retry"
   }
+  val project = remember(state.repo.sync.projects, directory) {
+    directory?.let { matchProject(state.repo.sync.projects, it) }
+  }
+  val session = remember(state.repo.sync.sessionsByDirectory, directory, sessionId) {
+    if (directory == null || sessionId == null) return@remember null
+    state.repo.sync.sessionsByDirectory[directory].orEmpty().firstOrNull { it.id == sessionId }
+  }
+  val branch = remember(state.repo.sync.vcsByDirectory, directory) {
+    directory
+      ?.let { state.repo.sync.vcsByDirectory[it]?.branch }
+      ?.trim()
+      ?.takeIf { it.isNotEmpty() }
+  }
+  val sessionHeader = remember(project, session, directory, sessionId, branch) {
+    if (directory == null || sessionId == null) return@remember null
+    buildSessionHeader(project = project, session = session, directory = directory, sessionId = sessionId, branch = branch)
+  }
+
+  LaunchedEffect(state.stage, directory, sessionId) {
+    if (state.stage != AppStage.Session) {
+      sessionInfoOpen = false
+      return@LaunchedEffect
+    }
+    if (directory == null || sessionId == null) {
+      sessionInfoOpen = false
+    }
+  }
 
   LaunchedEffect(state.stage, sessionId, messages.size) {
     if (state.stage != AppStage.Session || sessionId == null) return@LaunchedEffect
@@ -218,55 +253,79 @@ fun MainScreen(
 
   Scaffold(
     topBar = {
-      TopAppBar(
-        navigationIcon = {
-          if (state.stage == AppStage.Session) {
-            IconButton(onClick = onCloseSession) {
-              Icon(Icons.Rounded.ArrowBack, contentDescription = "Back to projects")
-            }
-          } else if (state.stage == AppStage.Projects) {
-            IconButton(onClick = onShowServerScreen) {
-              Icon(Icons.Rounded.ArrowBack, contentDescription = "Back to servers")
-            }
-          }
-        },
-        title = {
-          when (state.stage) {
-            AppStage.Servers -> {
-              Column {
-                Text("OpenCode", fontWeight = FontWeight.SemiBold)
-                Text("Server Selection", style = MaterialTheme.typography.labelSmall, color = ui.textMuted)
+      Column {
+        TopAppBar(
+          navigationIcon = {
+            if (state.stage == AppStage.Session) {
+              IconButton(onClick = onCloseSession) {
+                Icon(Icons.Rounded.ArrowBack, contentDescription = "Back to projects")
+              }
+            } else if (state.stage == AppStage.Projects) {
+              IconButton(onClick = onShowServerScreen) {
+                Icon(Icons.Rounded.ArrowBack, contentDescription = "Back to servers")
               }
             }
+          },
+          title = {
+            when (state.stage) {
+              AppStage.Servers -> {
+                Column {
+                  Text("OpenCode", fontWeight = FontWeight.SemiBold)
+                  Text("Server Selection", style = MaterialTheme.typography.labelSmall, color = ui.textMuted)
+                }
+              }
 
-            AppStage.Projects, AppStage.Session -> {
-              Column {
-                Text(
-                  if (state.stage == AppStage.Projects) "Project Management" else "Session",
-                  fontWeight = FontWeight.SemiBold,
-                )
-                ServerSubtitle(
-                  server = state.repo.activeServer,
-                  status = state.repo.activeServer?.let { state.serverStatus[it] },
-                )
+              AppStage.Projects -> {
+                Column {
+                  Text("Project Management", fontWeight = FontWeight.SemiBold)
+                  ServerSubtitle(
+                    server = state.repo.activeServer,
+                    status = state.repo.activeServer?.let { state.serverStatus[it] },
+                  )
+                }
+              }
+
+              AppStage.Session -> {
+                val header = sessionHeader
+                if (header == null) {
+                  Column {
+                    Text("Session", fontWeight = FontWeight.SemiBold)
+                    ServerSubtitle(
+                      server = state.repo.activeServer,
+                      status = state.repo.activeServer?.let { state.serverStatus[it] },
+                    )
+                  }
+                } else {
+                  SessionTitle(
+                    header = header,
+                    menuOpen = sessionInfoOpen,
+                    onOpenMenu = { sessionInfoOpen = true },
+                    onDismissMenu = { sessionInfoOpen = false },
+                  )
+                }
               }
             }
-          }
-        },
-        actions = {
-          IconButton(onClick = onRefresh) {
-            Icon(Icons.Rounded.Refresh, contentDescription = "Refresh")
-          }
-          if (state.stage == AppStage.Servers) {
-            IconButton(onClick = onRefreshServerStatus) {
-              Icon(Icons.Rounded.CheckCircle, contentDescription = "Refresh status")
+          },
+          actions = {
+            if (state.stage == AppStage.Session && directory != null && sessionId != null) {
+              ContextCircle(usage = metrics.usage, onOpen = { showContextDetails = true }, compact = true)
             }
-          }
-          IconButton(onClick = { settingsOpen = true }) {
-            Icon(Icons.Rounded.Settings, contentDescription = "Settings")
-          }
-        },
-      )
+            if (state.stage == AppStage.Servers) {
+              IconButton(onClick = onRefreshServerStatus) {
+                Icon(Icons.Rounded.CheckCircle, contentDescription = "Refresh status")
+              }
+            }
+            IconButton(onClick = { settingsOpen = true }) {
+              Icon(Icons.Rounded.Settings, contentDescription = "Settings")
+            }
+          },
+        )
+
+        if (state.stage == AppStage.Session && directory != null && sessionId != null) {
+          SessionTabToggle(tab = state.sessionTab, onSelect = onSelectSessionTab)
+          HorizontalDivider(color = ui.borderSubtle)
+        }
+      }
     },
     floatingActionButton = {
       if (state.stage == AppStage.Projects) {
@@ -388,7 +447,6 @@ fun MainScreen(
               fileTree = state.fileTree,
               expandedDirs = state.expandedDirs,
               changedFiles = state.changedFiles,
-              onSelectTab = onSelectSessionTab,
               terminalConnected = state.repo.terminalConnected,
               terminalOutput = state.repo.terminalOutput,
               onOpenTerminal = { onOpenTerminal(directory) },
@@ -400,10 +458,6 @@ fun MainScreen(
               onReplyPermission = onReplyPermission,
               onReplyQuestion = onReplyQuestion,
               onRejectQuestion = onRejectQuestion,
-              onOpenContext = {
-                showContextDetails = true
-              },
-              contextUsage = metrics.usage,
             )
           }
         }
@@ -518,6 +572,57 @@ private fun ServerSubtitle(server: String?, status: ServerProbe?) {
       maxLines = 1,
       overflow = TextOverflow.Ellipsis,
     )
+  }
+}
+
+@Composable
+private fun SessionTitle(
+  header: SessionHeaderInfo,
+  menuOpen: Boolean,
+  onOpenMenu: () -> Unit,
+  onDismissMenu: () -> Unit,
+) {
+  val ui = LocalOpenCodeColors.current
+  Box {
+    Row(
+      modifier = Modifier
+        .clickable(onClick = onOpenMenu)
+        .padding(vertical = 2.dp),
+      verticalAlignment = Alignment.CenterVertically,
+      horizontalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+      Column(modifier = Modifier.widthIn(max = 220.dp)) {
+        Text(header.title, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.SemiBold)
+        Text(header.subtitle, style = MaterialTheme.typography.labelSmall, color = ui.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+      }
+      Icon(Icons.Rounded.ExpandMore, contentDescription = "Session details", tint = ui.textMuted, modifier = Modifier.size(18.dp))
+    }
+    DropdownMenu(
+      expanded = menuOpen,
+      onDismissRequest = onDismissMenu,
+    ) {
+      Column(
+        modifier = Modifier
+          .widthIn(min = 220.dp, max = 360.dp)
+          .padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+      ) {
+        SessionMetaRow(label = "Project", value = header.project)
+        SessionMetaRow(label = header.locationLabel, value = header.location)
+        SessionMetaRow(label = "Path", value = header.path)
+        SessionMetaRow(label = "Last modified", value = header.updated)
+        SessionMetaRow(label = "Session ID", value = header.sessionId)
+      }
+    }
+  }
+}
+
+@Composable
+private fun SessionMetaRow(label: String, value: String) {
+  val ui = LocalOpenCodeColors.current
+  Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+    Text(label, style = MaterialTheme.typography.labelSmall, color = ui.textMuted)
+    Text(value, style = MaterialTheme.typography.bodySmall)
   }
 }
 
@@ -1109,7 +1214,6 @@ private fun SessionScreen(
   fileTree: Map<String, List<FileNodeDto>>,
   expandedDirs: Set<String>,
   changedFiles: List<FileStatusDto>,
-  onSelectTab: (SessionTab) -> Unit,
   terminalConnected: Boolean,
   terminalOutput: String,
   onOpenTerminal: () -> Unit,
@@ -1121,37 +1225,13 @@ private fun SessionScreen(
   onReplyPermission: (String, String) -> Unit,
   onReplyQuestion: (String, List<List<String>>) -> Unit,
   onRejectQuestion: (String) -> Unit,
-  onOpenContext: () -> Unit,
-  contextUsage: Int,
 ) {
-  val ui = LocalOpenCodeColors.current
   Column(
     modifier = Modifier
       .fillMaxSize()
       .padding(horizontal = 14.dp, vertical = 10.dp),
     verticalArrangement = Arrangement.spacedBy(10.dp),
   ) {
-    Card(
-      colors = CardDefaults.cardColors(containerColor = ui.panel),
-      border = BorderStroke(1.dp, ui.borderSubtle),
-    ) {
-      Row(
-        modifier = Modifier
-          .fillMaxWidth()
-          .padding(horizontal = 12.dp, vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.SpaceBetween,
-      ) {
-        Column(modifier = Modifier.weight(1f)) {
-          Text(directory, maxLines = 1, overflow = TextOverflow.Ellipsis)
-          Text("Session $sessionId", style = MaterialTheme.typography.labelSmall, color = ui.textMuted)
-        }
-        ContextCircle(usage = contextUsage, onOpen = onOpenContext)
-      }
-    }
-
-    SessionTabs(tab = sessionTab, onSelect = onSelectTab)
-
     when (sessionTab) {
       SessionTab.Chat -> {
         AttentionPanel(
@@ -1208,33 +1288,49 @@ private fun SessionScreen(
 }
 
 @Composable
-private fun ContextCircle(usage: Int, onOpen: () -> Unit) {
+private fun ContextCircle(usage: Int, onOpen: () -> Unit, compact: Boolean = false) {
   val bounded = usage.coerceIn(0, 100)
+  val size = if (compact) 32.dp else 36.dp
+  val stroke = if (compact) 2.5.dp else 3.dp
   Box(
     modifier = Modifier
-      .size(36.dp)
+      .size(size)
       .clickable(onClick = onOpen),
     contentAlignment = Alignment.Center,
   ) {
     CircularProgressIndicator(
       progress = { bounded / 100f },
-      strokeWidth = 3.dp,
+      strokeWidth = stroke,
       modifier = Modifier.fillMaxSize(),
     )
-    Text("$bounded%", style = MaterialTheme.typography.labelSmall)
+    Text(if (compact) "$bounded" else "$bounded%", style = MaterialTheme.typography.labelSmall)
   }
 }
 
 @Composable
-private fun SessionTabs(tab: SessionTab, onSelect: (SessionTab) -> Unit) {
-  Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-      SessionTabButton(active = tab == SessionTab.Chat, label = "Chat") { onSelect(SessionTab.Chat) }
-      SessionTabButton(active = tab == SessionTab.Terminal, label = "Terminal") { onSelect(SessionTab.Terminal) }
-    }
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-      SessionTabButton(active = tab == SessionTab.Review, label = "Review") { onSelect(SessionTab.Review) }
-      SessionTabButton(active = tab == SessionTab.Files, label = "Files") { onSelect(SessionTab.Files) }
+private fun SessionTabToggle(tab: SessionTab, onSelect: (SessionTab) -> Unit) {
+  val items = remember {
+    listOf(
+      SessionTab.Chat to "Chat",
+      SessionTab.Terminal to "Terminal",
+      SessionTab.Review to "Review",
+      SessionTab.Files to "Files",
+    )
+  }
+  SingleChoiceSegmentedButtonRow(
+    modifier = Modifier
+      .fillMaxWidth()
+      .padding(horizontal = 12.dp, vertical = 6.dp),
+  ) {
+    items.forEachIndexed { index, item ->
+      SegmentedButton(
+        selected = tab == item.first,
+        onClick = { onSelect(item.first) },
+        shape = SegmentedButtonDefaults.itemShape(index = index, count = items.size),
+        label = {
+          Text(item.second, maxLines = 1)
+        },
+      )
     }
   }
 }
@@ -1387,6 +1483,28 @@ private fun MessageTimeline(
   messages: List<MessageDto>,
   parts: Map<String, List<PartDto>>,
 ) {
+  val messageMeta = remember(messages, parts) {
+    val hiddenUser = mutableSetOf<String>()
+    val userShellAssistant = mutableSetOf<String>()
+    val byParent = messages.groupBy { it.parentID }
+    messages.forEach { message ->
+      if (message.role != "user") return@forEach
+      val items = parts[message.id].orEmpty()
+      if (!isUserShellMarker(items)) return@forEach
+      val child = byParent[message.id].orEmpty().firstOrNull { it.role == "assistant" } ?: return@forEach
+      val hasShell = parts[child.id].orEmpty().any { part ->
+        part.type == "tool" && (part.tool == "bash" || part.tool == "shell")
+      }
+      if (!hasShell) return@forEach
+      hiddenUser += message.id
+      userShellAssistant += child.id
+    }
+    MessageMeta(
+      visible = messages.filterNot { it.id in hiddenUser },
+      userShellAssistant = userShellAssistant,
+    )
+  }
+  val visibleMessages = messageMeta.visible
   val listState = rememberLazyListState()
   var jumped by remember(sessionId) { mutableStateOf(false) }
   var lastUser by remember(sessionId) { mutableStateOf<String?>(null) }
@@ -1399,28 +1517,28 @@ private fun MessageTimeline(
     }
   }
 
-  val tail = remember(messages, parts) {
-    val last = messages.lastOrNull() ?: return@remember "none"
+  val tail = remember(visibleMessages, parts) {
+    val last = visibleMessages.lastOrNull() ?: return@remember "none"
     val payload = parts[last.id].orEmpty().joinToString("|") { part ->
       "${part.id}:${part.type}:${part.text?.length ?: 0}:${part.state?.status ?: ""}"
     }
-    "${messages.size}:$payload"
+    "${visibleMessages.size}:$payload"
   }
 
-  LaunchedEffect(sessionId, messages.size) {
+  LaunchedEffect(sessionId, visibleMessages.size) {
     if (jumped) return@LaunchedEffect
-    if (messages.isEmpty()) return@LaunchedEffect
-    listState.scrollToItem(messages.lastIndex)
+    if (visibleMessages.isEmpty()) return@LaunchedEffect
+    listState.scrollToItem(visibleMessages.lastIndex)
     jumped = true
   }
 
   LaunchedEffect(promptScrollTick) {
-    if (messages.isEmpty()) return@LaunchedEffect
-    listState.animateScrollToItem(messages.lastIndex)
+    if (visibleMessages.isEmpty()) return@LaunchedEffect
+    listState.animateScrollToItem(visibleMessages.lastIndex)
   }
 
-  val userTail = remember(messages) { messages.lastOrNull { it.role == "user" }?.id }
-  LaunchedEffect(userTail, messages.size) {
+  val userTail = remember(visibleMessages) { visibleMessages.lastOrNull { it.role == "user" }?.id }
+  LaunchedEffect(userTail, visibleMessages.size) {
     val next = userTail ?: return@LaunchedEffect
     if (lastUser == null) {
       lastUser = next
@@ -1428,13 +1546,13 @@ private fun MessageTimeline(
     }
     if (lastUser == next) return@LaunchedEffect
     lastUser = next
-    listState.animateScrollToItem(messages.lastIndex)
+    listState.animateScrollToItem(visibleMessages.lastIndex)
   }
 
   LaunchedEffect(tail) {
     if (!canStick) return@LaunchedEffect
-    if (messages.isEmpty()) return@LaunchedEffect
-    listState.animateScrollToItem(messages.lastIndex)
+    if (visibleMessages.isEmpty()) return@LaunchedEffect
+    listState.animateScrollToItem(visibleMessages.lastIndex)
   }
 
   LazyColumn(
@@ -1442,17 +1560,18 @@ private fun MessageTimeline(
     state = listState,
     verticalArrangement = Arrangement.spacedBy(10.dp),
   ) {
-    items(messages, key = { it.id }) { message ->
+    items(visibleMessages, key = { it.id }) { message ->
       MessageCard(
         message = message,
         parts = parts[message.id].orEmpty().sortedBy { it.id },
+        userShell = message.id in messageMeta.userShellAssistant,
       )
     }
   }
 }
 
 @Composable
-private fun MessageCard(message: MessageDto, parts: List<PartDto>) {
+private fun MessageCard(message: MessageDto, parts: List<PartDto>, userShell: Boolean = false) {
   val ui = LocalOpenCodeColors.current
   Card(
     colors = CardDefaults.cardColors(containerColor = ui.panel),
@@ -1466,7 +1585,6 @@ private fun MessageCard(message: MessageDto, parts: List<PartDto>) {
     ) {
       Row(
         modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
       ) {
         val role = when (message.role) {
@@ -1474,8 +1592,23 @@ private fun MessageCard(message: MessageDto, parts: List<PartDto>) {
           "user" -> "You"
           else -> message.role.replaceFirstChar { if (it.isLowerCase()) it.titlecase(Locale.getDefault()) else it.toString() }
         }
-        Text(role, fontWeight = FontWeight.SemiBold)
-        Text(timeStamp(message.time.created), style = MaterialTheme.typography.labelSmall, color = ui.textMuted)
+        Text(
+          text = markdownInline(role),
+          modifier = Modifier
+            .weight(1f)
+            .padding(end = 8.dp)
+            .basicMarquee(),
+          style = MaterialTheme.typography.bodyMedium,
+          fontWeight = FontWeight.SemiBold,
+          maxLines = 1,
+          softWrap = false,
+          overflow = TextOverflow.Clip,
+        )
+        Text(
+          text = timeStamp(message.time.created),
+          style = MaterialTheme.typography.labelSmall,
+          color = ui.textMuted,
+        )
       }
 
       if (message.role == "user") {
@@ -1497,35 +1630,54 @@ private fun MessageCard(message: MessageDto, parts: List<PartDto>) {
       }
 
       if (message.role == "assistant") {
-        AssistantParts(parts)
+        AssistantParts(parts = parts, userShell = userShell)
       }
     }
   }
 }
 
 @Composable
-private fun AssistantParts(parts: List<PartDto>) {
+private fun AssistantParts(parts: List<PartDto>, userShell: Boolean = false) {
+  val hasTool = parts.any { it.type == "tool" && !isHiddenTool(it.tool) }
+  val hasApplyPatch = parts.any { it.type == "tool" && it.tool == "apply_patch" }
+  val hasText = parts.any { it.type == "text" && !it.text.isNullOrBlank() }
+  val finalTextId = parts.lastOrNull { it.type == "text" && !it.text.isNullOrBlank() }?.id
   parts.forEach { part ->
     if (isImplicitStep(part.type)) return@forEach
     when (part.type) {
       "text" -> {
         val text = part.text?.trim().orEmpty()
-        if (text.isNotBlank()) {
+        if (text.isBlank()) return@forEach
+        if (part.id == finalTextId) {
+          MarkdownText(text = text)
+          return@forEach
+        }
+        CollapsiblePart(
+          title = shorten(text.lineSequence().firstOrNull { it.isNotBlank() } ?: "Text", 80),
+          icon = Icons.Rounded.ChevronRight,
+        ) {
           MarkdownText(text = text)
         }
       }
 
       "reasoning" -> {
-        CollapsiblePart(
-          title = "Thinking",
-          icon = Icons.Rounded.ExpandMore,
-        ) {
-          MarkdownText(part.text.orEmpty())
+        val text = part.text?.trim().orEmpty()
+        if (text.isBlank()) return@forEach
+        if (!hasTool && hasText) return@forEach
+        if (reasoningIsLong(text)) {
+          CollapsiblePart(
+            title = "Thinking",
+            icon = Icons.Rounded.ExpandMore,
+          ) {
+            MarkdownText(text)
+          }
         }
       }
 
       "tool" -> {
-        ToolPartCard(part)
+        if (isHiddenTool(part.tool)) return@forEach
+        if (part.tool == "patch" && hasApplyPatch) return@forEach
+        ToolPartCard(part = part, userShell = userShell)
       }
 
       else -> {
@@ -1544,7 +1696,7 @@ private fun AssistantParts(parts: List<PartDto>) {
 }
 
 @Composable
-private fun ToolPartCard(part: PartDto) {
+private fun ToolPartCard(part: PartDto, userShell: Boolean = false) {
   val ui = LocalOpenCodeColors.current
   val state = part.state
   val status = state?.status ?: "pending"
@@ -1554,19 +1706,186 @@ private fun ToolPartCard(part: PartDto) {
     "running", "pending" -> ui.warning
     else -> ui.info
   }
-  val title = buildString {
-    append(toolTitle(part.tool ?: "tool"))
+  val title = toolTitle(part.tool ?: "tool")
+  val output = state?.output?.trim().orEmpty()
+  val error = state?.error?.trim().orEmpty()
+  val input = prettyJson(state?.input)
+
+  when (part.tool) {
+    "read" -> {
+      ToolCard(
+        tool = part.tool ?: "read",
+        title = title,
+        subtitle = inputPathTitle(part.state?.input, key = "filePath"),
+        status = status,
+        tint = color,
+      )
+      return
+    }
+
+    "list" -> {
+      ToolCard(
+        tool = part.tool ?: "list",
+        title = title,
+        subtitle = inputPathTitle(part.state?.input, key = "path") ?: "/",
+        status = status,
+        tint = color,
+      ) {
+        if (output.isNotBlank()) MarkdownText(output)
+        if (error.isNotBlank()) CodeBlock(error)
+      }
+      return
+    }
+
+    "glob", "grep" -> {
+      ToolCard(
+        tool = part.tool ?: "glob",
+        title = title,
+        subtitle = inputPathTitle(part.state?.input, key = "path") ?: "/",
+        args = buildList {
+          inputString(part.state?.input, "pattern")?.let { add("pattern=$it") }
+          inputString(part.state?.input, "include")?.let { add("include=$it") }
+        },
+        status = status,
+        tint = color,
+      ) {
+        if (output.isNotBlank()) MarkdownText(output)
+        if (error.isNotBlank()) CodeBlock(error)
+      }
+      return
+    }
+
+    "webfetch" -> {
+      ToolCard(
+        tool = part.tool ?: "webfetch",
+        title = title,
+        subtitle = inputString(part.state?.input, "url"),
+        status = status,
+        tint = color,
+      ) {
+        if (output.isNotBlank()) MarkdownText(output)
+        if (error.isNotBlank()) CodeBlock(error)
+      }
+      return
+    }
+
+    "task" -> {
+      val type = inputString(part.state?.input, "subagent_type")
+      ToolCard(
+        tool = part.tool ?: "task",
+        title = if (type.isNullOrBlank()) "Agent" else "Agent ($type)",
+        subtitle = inputString(part.state?.input, "description"),
+        status = status,
+        tint = color,
+      ) {
+        if (output.isNotBlank()) MarkdownText(output)
+        if (error.isNotBlank()) CodeBlock(error)
+      }
+      return
+    }
+
+    "bash" -> {
+      val command = inputString(part.state?.input, "command")
+      ToolCard(
+        tool = part.tool ?: "bash",
+        title = title,
+        subtitle = inputString(part.state?.input, "description"),
+        status = status,
+        tint = color,
+        tag = if (userShell) "user" else null,
+      ) {
+        val text = if (command.isNullOrBlank()) output else "$ $command\n\n$output"
+        if (text.isNotBlank()) CodeBlock(text)
+        if (error.isNotBlank()) CodeBlock(error)
+      }
+      return
+    }
+
+    "edit" -> {
+      ToolCard(
+        tool = part.tool ?: "edit",
+        title = title,
+        subtitle = inputPathTitle(part.state?.input, key = "filePath"),
+        status = status,
+        tint = color,
+      ) {
+        val diff = editDiff(part)
+        if (diff != null) {
+          DiffView(before = diff.before, after = diff.after)
+        } else if (output.isNotBlank()) {
+          CodeBlock(output)
+        }
+        if (error.isNotBlank()) CodeBlock(error)
+      }
+      return
+    }
+
+    "write" -> {
+      ToolCard(
+        tool = part.tool ?: "write",
+        title = title,
+        subtitle = inputPathTitle(part.state?.input, key = "filePath"),
+        status = status,
+        tint = color,
+      ) {
+        val content = inputString(part.state?.input, "content")
+        if (!content.isNullOrBlank()) {
+          CodeBlock(content)
+        } else if (output.isNotBlank()) {
+          CodeBlock(output)
+        }
+        if (error.isNotBlank()) CodeBlock(error)
+      }
+      return
+    }
+
+    "apply_patch", "patch" -> {
+      ToolCard(
+        tool = part.tool ?: "patch",
+        title = title,
+        subtitle = patchSummary(part),
+        status = status,
+        tint = color,
+        inset = false,
+      ) {
+        val list = patchFiles(part)
+        if (list.isNotEmpty()) {
+          list.forEach { file ->
+            PatchFileCard(file)
+          }
+        } else if (output.isNotBlank()) {
+          CodeBlock(output)
+        }
+        if (error.isNotBlank()) CodeBlock(error)
+      }
+      return
+    }
+
+    "question" -> {
+      ToolCard(
+        tool = part.tool ?: "question",
+        title = title,
+        subtitle = questionSummary(part),
+        status = status,
+        tint = color,
+      ) {
+        if (output.isNotBlank()) MarkdownText(output)
+        if (error.isNotBlank()) CodeBlock(error)
+      }
+      return
+    }
+  }
+
+  val rawTitle = buildString {
+    append(title)
     if (!state?.title.isNullOrBlank()) {
       append(" - ")
       append(state?.title)
     }
   }
-  val output = state?.output?.trim().orEmpty()
-  val error = state?.error?.trim().orEmpty()
-  val input = prettyJson(state?.input)
 
   CollapsiblePart(
-    title = title,
+    title = rawTitle,
     icon = toolIcon(part.tool),
     badge = status,
     tint = color,
@@ -1586,6 +1905,191 @@ private fun ToolPartCard(part: PartDto) {
       }
       if (output.isBlank() && error.isBlank()) {
         Text("No output", style = MaterialTheme.typography.bodySmall, color = ui.textMuted)
+      }
+    }
+  }
+}
+
+@Composable
+private fun ToolCard(
+  tool: String,
+  title: String,
+  subtitle: String? = null,
+  args: List<String> = emptyList(),
+  status: String,
+  tint: Color,
+  tag: String? = null,
+  inset: Boolean = true,
+  content: (@Composable () -> Unit)? = null,
+) {
+  val ui = LocalOpenCodeColors.current
+  val statusText = statusLabel(status)
+  val statusColor = statusTone(status, ui)
+  var open by rememberSaveable(tool, title, subtitle, status) { mutableStateOf(false) }
+  val expandable = content != null
+  Card(
+    colors = CardDefaults.cardColors(containerColor = ui.element),
+    border = BorderStroke(1.dp, ui.borderSubtle),
+    modifier = Modifier.fillMaxWidth(),
+  ) {
+    Column(
+      modifier = Modifier
+        .fillMaxWidth()
+        .padding(horizontal = 10.dp, vertical = 8.dp),
+      verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+      Row(
+        modifier = Modifier
+          .fillMaxWidth()
+          .clickable(enabled = expandable) { open = !open },
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+      ) {
+        Surface(
+          shape = CircleShape,
+          color = tint.copy(alpha = 0.16f),
+          border = BorderStroke(1.dp, tint.copy(alpha = 0.45f)),
+        ) {
+          Box(
+            modifier = Modifier.size(24.dp),
+            contentAlignment = Alignment.Center,
+          ) {
+            Icon(toolCardIcon(tool), contentDescription = null, tint = tint, modifier = Modifier.size(14.dp))
+          }
+        }
+        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+          Text(
+            text = markdownInline(title),
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+          )
+          if (!subtitle.isNullOrBlank()) {
+            Text(
+              subtitle,
+              style = MaterialTheme.typography.labelSmall,
+              color = ui.textMuted,
+              maxLines = 1,
+              overflow = TextOverflow.Ellipsis,
+            )
+          }
+          if (args.isNotEmpty()) {
+            Row(
+              modifier = Modifier.horizontalScroll(rememberScrollState()),
+              horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+              args.forEach { item ->
+                Surface(
+                  shape = RoundedCornerShape(6.dp),
+                  color = ui.panel,
+                  border = BorderStroke(1.dp, ui.borderSubtle),
+                ) {
+                  Text(
+                    text = item,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = ui.textMuted,
+                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                  )
+                }
+              }
+            }
+          }
+        }
+        Surface(
+          shape = RoundedCornerShape(999.dp),
+          color = statusColor.copy(alpha = 0.14f),
+          border = BorderStroke(1.dp, statusColor.copy(alpha = 0.45f)),
+        ) {
+          Text(
+            text = statusText,
+            style = MaterialTheme.typography.labelSmall,
+            color = statusColor,
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+          )
+        }
+        if (!tag.isNullOrBlank()) {
+          Surface(
+            shape = RoundedCornerShape(999.dp),
+            color = ui.info.copy(alpha = 0.14f),
+            border = BorderStroke(1.dp, ui.info.copy(alpha = 0.45f)),
+          ) {
+            Text(
+              text = tag,
+              style = MaterialTheme.typography.labelSmall,
+              color = ui.info,
+              modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+            )
+          }
+        }
+        if (expandable) {
+          Icon(
+            if (open) Icons.Rounded.ExpandMore else Icons.Rounded.ChevronRight,
+            contentDescription = null,
+            tint = ui.textMuted,
+            modifier = Modifier.size(18.dp),
+          )
+        }
+      }
+      AnimatedVisibility(visible = expandable && open) {
+        content?.let {
+          if (inset) {
+            Surface(
+              shape = RoundedCornerShape(8.dp),
+              color = ui.panel,
+              border = BorderStroke(1.dp, ui.borderSubtle.copy(alpha = 0.8f)),
+            ) {
+              Column(
+                modifier = Modifier
+                  .fillMaxWidth()
+                  .padding(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+              ) {
+                it()
+              }
+            }
+          } else {
+            it()
+          }
+        }
+      }
+    }
+  }
+}
+
+@Composable
+private fun PatchFileCard(file: PatchViewFile) {
+  val ui = LocalOpenCodeColors.current
+  var open by rememberSaveable(file.file) { mutableStateOf(false) }
+  val status = file.status ?: "updated"
+  val diffText = file.diff.takeIf { it.isNotBlank() }
+  Card(
+    colors = CardDefaults.cardColors(containerColor = ui.panel),
+    border = BorderStroke(1.dp, ui.borderSubtle),
+    modifier = Modifier.fillMaxWidth(),
+  ) {
+    Column(Modifier.fillMaxWidth()) {
+      Row(
+        modifier = Modifier
+          .fillMaxWidth()
+          .clickable { open = !open }
+          .padding(horizontal = 10.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+      ) {
+        Icon(fileIcon(file.file.substringAfterLast('.', ""), isDirectory = false), contentDescription = null, tint = ui.info, modifier = Modifier.size(16.dp))
+        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+          Text(file.file, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+          Text("$status (+${file.additions} -${file.deletions})", style = MaterialTheme.typography.labelSmall, color = ui.textMuted)
+        }
+        Icon(if (open) Icons.Rounded.ExpandMore else Icons.Rounded.ChevronRight, contentDescription = null, tint = ui.textMuted)
+      }
+      AnimatedVisibility(visible = open) {
+        if (!diffText.isNullOrBlank()) {
+          CodeBlock(diffText)
+        } else {
+          DiffView(before = file.before, after = file.after)
+        }
       }
     }
   }
@@ -1617,7 +2121,7 @@ private fun CollapsiblePart(
       ) {
         Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(16.dp))
         Text(
-          title,
+          markdownInline(title),
           modifier = Modifier.weight(1f),
           style = MaterialTheme.typography.bodyMedium,
           maxLines = 1,
@@ -2677,6 +3181,17 @@ private data class ModelItem(
   val variants: List<String>,
 )
 
+private data class SessionHeaderInfo(
+  val title: String,
+  val subtitle: String,
+  val project: String,
+  val locationLabel: String,
+  val location: String,
+  val path: String,
+  val updated: String,
+  val sessionId: String,
+)
+
 private data class SessionMetrics(
   val totalCost: Double,
   val context: ContextMetrics?,
@@ -2725,26 +3240,223 @@ private data class FileRow(
   val expanded: Boolean,
 )
 
+private data class PatchViewFile(
+  val file: String,
+  val diff: String,
+  val before: String,
+  val after: String,
+  val additions: Int,
+  val deletions: Int,
+  val status: String? = null,
+)
+
+private data class MessageMeta(
+  val visible: List<MessageDto>,
+  val userShellAssistant: Set<String>,
+)
+
+private fun matchProject(projects: List<ProjectDto>, directory: String): ProjectDto? {
+  return projects.firstOrNull { it.worktree == directory || directory in it.sandboxes }
+}
+
+private fun buildSessionHeader(
+  project: ProjectDto?,
+  session: SessionDto?,
+  directory: String,
+  sessionId: String,
+  branch: String?,
+): SessionHeaderInfo {
+  val title = session?.title?.ifBlank { session.slug } ?: session?.slug ?: "Session $sessionId"
+  val projectName = project?.name?.ifBlank { null } ?: leaf(project?.worktree ?: directory)
+  val local = project?.worktree == directory
+  val locationLabel = if (local) "Branch" else "Workspace"
+  val location = if (local) branch ?: "Local" else leaf(directory)
+  val subtitle = if (local) {
+    if (branch != null) "$projectName - $branch" else "$projectName - local"
+  } else {
+    "$projectName - workspace"
+  }
+  val stamp = session?.time?.updated ?: session?.time?.created
+  return SessionHeaderInfo(
+    title = title,
+    subtitle = subtitle,
+    project = projectName,
+    locationLabel = locationLabel,
+    location = location,
+    path = directory,
+    updated = stamp?.let(::timeStampDetailed) ?: "Unknown",
+    sessionId = sessionId,
+  )
+}
+
+private fun leaf(path: String): String {
+  val clean = path.trimEnd('/', '\\')
+  if (clean.isEmpty()) return path
+  return clean.substringAfterLast('/').substringAfterLast('\\')
+}
+
+private fun markdownInline(value: String): AnnotatedString {
+  val text = value.replace(Regex("\\s+"), " ").trim()
+  if (text.isEmpty()) return AnnotatedString("")
+  return buildAnnotatedString {
+    var index = 0
+    while (index < text.length) {
+      if (text.startsWith("**", index)) {
+        val end = text.indexOf("**", index + 2)
+        if (end > index + 2) {
+          withStyle(SpanStyle(fontWeight = FontWeight.SemiBold)) {
+            append(text.substring(index + 2, end))
+          }
+          index = end + 2
+          continue
+        }
+      }
+      if (text[index] == '*') {
+        val end = text.indexOf('*', index + 1)
+        if (end > index + 1) {
+          withStyle(SpanStyle(fontStyle = FontStyle.Italic)) {
+            append(text.substring(index + 1, end))
+          }
+          index = end + 1
+          continue
+        }
+      }
+      if (text[index] == '`') {
+        val end = text.indexOf('`', index + 1)
+        if (end > index + 1) {
+          withStyle(SpanStyle(fontFamily = FontFamily.Monospace)) {
+            append(text.substring(index + 1, end))
+          }
+          index = end + 1
+          continue
+        }
+      }
+      append(text[index])
+      index += 1
+    }
+  }
+}
+
+private fun isHiddenTool(tool: String?): Boolean {
+  return tool == "todowrite" || tool == "todoread"
+}
+
+private fun reasoningIsLong(text: String): Boolean {
+  if (text.length > 260) return true
+  return text.lineSequence().count { it.isNotBlank() } > 5
+}
+
+private fun firstThought(text: String): String {
+  return text
+    .lineSequence()
+    .map { it.trim() }
+    .firstOrNull { it.isNotBlank() }
+    ?.replace(Regex("\\s+"), " ")
+    .orEmpty()
+}
+
+private fun isUserShellMarker(parts: List<PartDto>): Boolean {
+  if (parts.isEmpty()) return false
+  val textParts = parts.filter { it.type == "text" }
+  if (textParts.size != parts.size) return false
+  if (textParts.size != 1) return false
+  return textParts.first().text?.trim() == "The following tool was executed by the user"
+}
+
+private fun inputString(input: JsonObject?, key: String): String? {
+  val value = input?.get(key) as? JsonPrimitive ?: return null
+  return value.contentOrNull
+}
+
+private fun inputPathTitle(input: JsonObject?, key: String): String? {
+  return inputString(input, key)?.let(::leaf)
+}
+
+private fun editDiff(part: PartDto): FileDiffDto? {
+  val filediff = part.state?.metadata?.get("filediff")?.let { it as? JsonObject } ?: return null
+  val file = (filediff["file"] as? JsonPrimitive)?.contentOrNull
+    ?: inputString(part.state?.input, "filePath")
+    ?: return null
+  val before = (filediff["before"] as? JsonPrimitive)?.contentOrNull.orEmpty()
+  val after = (filediff["after"] as? JsonPrimitive)?.contentOrNull.orEmpty()
+  val additions = (filediff["additions"] as? JsonPrimitive)?.intOrNull
+    ?: diffRows(before, after).count { it.kind == DiffKind.Added }
+  val deletions = (filediff["deletions"] as? JsonPrimitive)?.intOrNull
+    ?: diffRows(before, after).count { it.kind == DiffKind.Removed }
+  return FileDiffDto(file = file, before = before, after = after, additions = additions, deletions = deletions)
+}
+
+private fun patchSummary(part: PartDto): String {
+  val files = patchFiles(part)
+  if (files.isEmpty()) return ""
+  return "${files.size} file${if (files.size == 1) "" else "s"}"
+}
+
+private fun patchFiles(part: PartDto): List<PatchViewFile> {
+  val files = part.state?.metadata?.get("files")?.let { it as? JsonArray } ?: return emptyList()
+  return files.mapNotNull { item ->
+    val obj = item as? JsonObject ?: return@mapNotNull null
+    val file = (obj["relativePath"] as? JsonPrimitive)?.contentOrNull
+      ?: (obj["filePath"] as? JsonPrimitive)?.contentOrNull
+      ?: (obj["path"] as? JsonPrimitive)?.contentOrNull
+      ?: return@mapNotNull null
+    val before = (obj["before"] as? JsonPrimitive)?.contentOrNull.orEmpty()
+    val after = (obj["after"] as? JsonPrimitive)?.contentOrNull.orEmpty()
+    val diff = (obj["diff"] as? JsonPrimitive)?.contentOrNull.orEmpty()
+    val status = (obj["type"] as? JsonPrimitive)?.contentOrNull
+    val additions = (obj["additions"] as? JsonPrimitive)?.intOrNull
+      ?: diffRows(before, after).count { it.kind == DiffKind.Added }
+    val deletions = (obj["deletions"] as? JsonPrimitive)?.intOrNull
+      ?: diffRows(before, after).count { it.kind == DiffKind.Removed }
+    PatchViewFile(
+      file = file,
+      diff = diff,
+      before = before,
+      after = after,
+      additions = additions,
+      deletions = deletions,
+      status = status,
+    )
+  }
+}
+
+private fun questionSummary(part: PartDto): String {
+  val list = part.state?.input?.get("questions")?.let { it as? JsonArray } ?: return ""
+  if (list.isEmpty()) return ""
+  return "${list.size} question${if (list.size == 1) "" else "s"}"
+}
+
 private fun toolTitle(name: String): String {
   return when (name) {
     "bash" -> "Shell"
     "read" -> "Read"
     "write" -> "Write"
     "edit" -> "Edit"
-    "grep" -> "Search"
+    "grep" -> "Grep"
     "glob" -> "Glob"
     "list" -> "List"
-    "task" -> "Sub-agent"
+    "task" -> "Agent"
+    "webfetch" -> "Web Fetch"
     "apply_patch" -> "Patch"
+    "patch" -> "Patch"
+    "question" -> "Questions"
     else -> name
   }
 }
 
 private fun assistantTitle(parts: List<PartDto>): String {
+  val reasoning = parts.firstNotNullOfOrNull { part ->
+    if (part.type != "reasoning") return@firstNotNullOfOrNull null
+    val text = part.text?.trim().orEmpty()
+    if (text.isBlank() || reasoningIsLong(text)) return@firstNotNullOfOrNull null
+    firstThought(text).takeIf { it.isNotBlank() }
+  }
+  if (reasoning != null) return reasoning
+
   val tool = parts.firstNotNullOfOrNull { part ->
     if (part.type != "tool") return@firstNotNullOfOrNull null
     val title = part.state?.title?.trim().orEmpty()
-    if (title.isNotEmpty()) return@firstNotNullOfOrNull shorten(title.replace(Regex("\\s+"), " "), 46)
+    if (title.isNotEmpty()) return@firstNotNullOfOrNull title.replace(Regex("\\s+"), " ")
     val name = part.tool?.trim().orEmpty()
     if (name.isNotEmpty()) return@firstNotNullOfOrNull "${toolTitle(name)} step"
     null
@@ -2758,13 +3470,47 @@ private fun assistantTitle(parts: List<PartDto>): String {
       ?.map { it.trim() }
       ?.firstOrNull { it.isNotBlank() }
   }
-  if (text != null) return shorten(text.replace(Regex("\\s+"), " "), 46)
+  if (text != null) return text.replace(Regex("\\s+"), " ")
 
   return "Assistant"
 }
 
 private fun isImplicitStep(type: String): Boolean {
   return type == "step-start" || type == "step-finish" || type == "step_start" || type == "step_finish"
+}
+
+private fun statusLabel(status: String): String {
+  return when (status) {
+    "completed" -> "done"
+    "error" -> "error"
+    "running" -> "running"
+    "pending" -> "pending"
+    else -> status
+  }
+}
+
+@Composable
+private fun statusTone(status: String, ui: OpenCodeUiColors): Color {
+  return when (status) {
+    "completed" -> ui.success
+    "error" -> MaterialTheme.colorScheme.error
+    "running", "pending" -> ui.warning
+    else -> ui.info
+  }
+}
+
+private fun toolCardIcon(name: String): androidx.compose.ui.graphics.vector.ImageVector {
+  return when (name) {
+    "read" -> Icons.Rounded.Description
+    "list" -> Icons.Rounded.Folder
+    "glob", "grep" -> Icons.Rounded.ChevronRight
+    "webfetch" -> Icons.Rounded.Image
+    "task" -> Icons.Rounded.MoreVert
+    "bash" -> Icons.Rounded.Description
+    "edit", "write", "apply_patch" -> Icons.Rounded.Code
+    "question" -> Icons.Rounded.WarningAmber
+    else -> Icons.Rounded.ChevronRight
+  }
 }
 
 private fun toolIcon(name: String?): androidx.compose.ui.graphics.vector.ImageVector {
@@ -3360,6 +4106,12 @@ private fun sessionMetrics(messages: List<MessageDto>, providers: ProviderListDt
 private fun timeStamp(epoch: Long): String {
   return runCatching {
     SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(epoch))
+  }.getOrElse { "" }
+}
+
+private fun timeStampDetailed(epoch: Long): String {
+  return runCatching {
+    SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date(epoch))
   }.getOrElse { "" }
 }
 

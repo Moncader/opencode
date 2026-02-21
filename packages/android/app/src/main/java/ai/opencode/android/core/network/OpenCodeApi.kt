@@ -28,6 +28,7 @@ import ai.opencode.android.core.model.SessionStatusDto
 import ai.opencode.android.core.model.TodoDto
 import ai.opencode.android.core.model.UpdateSessionRequestDto
 import ai.opencode.android.core.model.UpdateSessionTimeDto
+import ai.opencode.android.core.model.VcsInfoDto
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 import kotlinx.serialization.builtins.ListSerializer
@@ -97,6 +98,10 @@ class OpenCodeApi(
 
   suspend fun configGet(): ConfigDto {
     return get("/config", ConfigDto.serializer())
+  }
+
+  suspend fun vcsGet(): VcsInfoDto {
+    return get("/vcs", VcsInfoDto.serializer())
   }
 
   suspend fun sessionList(limit: Int = 100, roots: Boolean = true): List<SessionDto> {

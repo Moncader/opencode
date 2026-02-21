@@ -196,6 +196,7 @@ class OpenCodeRepository(
       val sessions = scope.async(Dispatchers.IO) { api.sessionList() }
       val permissions = scope.async(Dispatchers.IO) { api.permissionList() }
       val questions = scope.async(Dispatchers.IO) { api.questionList() }
+      val vcs = scope.async(Dispatchers.IO) { runCatching { api.vcsGet() }.getOrNull() }
 
       internal.update { cur ->
         val sync = cur.sync.copy(
@@ -203,6 +204,7 @@ class OpenCodeRepository(
           sessionStatusByDirectory = cur.sync.sessionStatusByDirectory + (directory to status.await()),
           permissionBySession = cur.sync.permissionBySession + permissions.await().groupBy { it.sessionID },
           questionBySession = cur.sync.questionBySession + questions.await().groupBy { it.sessionID },
+          vcsByDirectory = vcs.await()?.let { cur.sync.vcsByDirectory + (directory to it) } ?: (cur.sync.vcsByDirectory - directory),
         )
 
         val agentList = agents.await().filter { it.mode != "subagent" && !it.hidden }
