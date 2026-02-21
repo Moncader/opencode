@@ -26,8 +26,16 @@ data class ProjectDto(
   val worktree: String,
   val vcs: String? = null,
   val name: String? = null,
+  val icon: ProjectIconDto? = null,
   val time: ProjectTimeDto,
   val sandboxes: List<String> = emptyList(),
+)
+
+@Serializable
+data class ProjectIconDto(
+  val url: String? = null,
+  val override: String? = null,
+  val color: String? = null,
 )
 
 @Serializable
@@ -93,8 +101,16 @@ data class SessionDto(
   val projectID: String,
   val directory: String,
   val parentID: String? = null,
+  val summary: SessionSummaryDto? = null,
   val title: String = "",
   val time: SessionTimeDto,
+)
+
+@Serializable
+data class SessionSummaryDto(
+  val additions: Int = 0,
+  val deletions: Int = 0,
+  val files: Int = 0,
 )
 
 @Serializable

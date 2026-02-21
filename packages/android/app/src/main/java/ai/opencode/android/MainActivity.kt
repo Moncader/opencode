@@ -88,6 +88,7 @@ class MainActivity : ComponentActivity() {
           onRefresh = vm::refresh,
           onSetTheme = vm::setTheme,
           onSetThemeMode = vm::setThemeMode,
+          onMarkSessionSeen = vm::markSessionSeen,
         )
       }
     }

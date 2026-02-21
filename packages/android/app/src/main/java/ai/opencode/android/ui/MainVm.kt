@@ -79,6 +79,7 @@ data class MainState(
   val manualProjects: Set<String> = emptySet(),
   val projectQuery: String = "",
   val projectSuggestions: List<String> = emptyList(),
+  val sessionSeenAt: Map<String, Long> = emptyMap(),
   val themeName: String = "opencode",
   val themeMode: ThemeMode = ThemeMode.System,
   val themeNames: List<String> = emptyList(),
@@ -102,6 +103,7 @@ private data class UiState(
   val manualProjects: Set<String> = emptySet(),
   val projectQuery: String = "",
   val projectSuggestions: List<String> = emptyList(),
+  val sessionSeenAt: Map<String, Long> = emptyMap(),
 )
 
 class MainVm(
@@ -143,6 +145,7 @@ class MainVm(
       manualProjects = us.manualProjects,
       projectQuery = us.projectQuery,
       projectSuggestions = us.projectSuggestions,
+      sessionSeenAt = us.sessionSeenAt,
       themeName = pref.theme,
       themeMode = ThemeMode.from(pref.mode),
       themeNames = themeNames,
@@ -175,6 +178,7 @@ class MainVm(
         )
       }
       refreshServerProbe(repo.state.value.servers.list.map { it.url })
+      preloadProjects()
     }
   }
 
@@ -192,6 +196,7 @@ class MainVm(
         )
       }
       refreshServerProbe(repo.state.value.servers.list.map { it.url })
+      preloadProjects()
     }
   }
 
@@ -208,6 +213,7 @@ class MainVm(
   fun showProjectScreen() {
     if (!repo.state.value.connected) return
     ui.update { it.copy(stage = AppStage.Projects) }
+    preloadProjects()
   }
 
   fun removeServer(url: String) {
@@ -243,22 +249,15 @@ class MainVm(
   }
 
   fun openProject(directory: String) {
-    if (directory.isBlank()) return
+    val next = directory.trim()
+    if (next.isBlank()) return
     viewModelScope.launch {
-      val prev = ui.value.selectedProject
-      if (prev != null && prev != directory) repo.terminalClose(prev)
-      repo.openDirectory(directory)
-      ui.update {
-        resetSessionPanels(
-          it.copy(
-            stage = AppStage.Projects,
-            selectedProject = directory,
-            manualProjects = it.manualProjects + directory,
-            projectSuggestions = emptyList(),
-          ),
-        )
-      }
-      loadRootFiles(directory)
+      activateProject(
+        directory = next,
+        addManual = next != "/",
+        resetPanels = true,
+        loadFiles = true,
+      )
     }
   }
 
@@ -281,25 +280,52 @@ class MainVm(
     }
   }
 
-  fun createSession() {
-    val dir = ui.value.selectedProject ?: return
+  fun createSession(directory: String) {
+    val dir = directory.trim()
+    if (dir.isBlank()) return
     viewModelScope.launch {
+      activateProject(
+        directory = dir,
+        addManual = false,
+        resetPanels = false,
+        loadFiles = false,
+      )
       val next = repo.createSession(dir) ?: return@launch
       repo.openSession(dir, next)
-      ui.update { it.copy(stage = AppStage.Session, sessionTab = SessionTab.Chat) }
+      ui.update {
+        it.copy(
+          stage = AppStage.Session,
+          sessionTab = SessionTab.Chat,
+          sessionSeenAt = it.sessionSeenAt + (next to System.currentTimeMillis()),
+        )
+      }
     }
   }
 
-  fun openSession(sessionId: String) {
-    val dir = ui.value.selectedProject ?: return
+  fun openSession(directory: String, sessionId: String) {
+    val dir = directory.trim()
+    if (dir.isBlank()) return
     viewModelScope.launch {
+      activateProject(
+        directory = dir,
+        addManual = false,
+        resetPanels = false,
+        loadFiles = false,
+      )
       repo.openSession(dir, sessionId)
-      ui.update { it.copy(stage = AppStage.Session, sessionTab = SessionTab.Chat) }
+      ui.update {
+        it.copy(
+          stage = AppStage.Session,
+          sessionTab = SessionTab.Chat,
+          sessionSeenAt = it.sessionSeenAt + (sessionId to System.currentTimeMillis()),
+        )
+      }
     }
   }
 
-  fun deleteSession(sessionId: String) {
-    val dir = ui.value.selectedProject ?: return
+  fun deleteSession(directory: String, sessionId: String) {
+    val dir = directory.trim()
+    if (dir.isBlank()) return
     viewModelScope.launch {
       val ok = repo.deleteSession(directory = dir, sessionId = sessionId)
       if (!ok) return@launch
@@ -309,8 +335,9 @@ class MainVm(
     }
   }
 
-  fun archiveSession(sessionId: String) {
-    val dir = ui.value.selectedProject ?: return
+  fun archiveSession(directory: String, sessionId: String) {
+    val dir = directory.trim()
+    if (dir.isBlank()) return
     viewModelScope.launch {
       val ok = repo.archiveSession(directory = dir, sessionId = sessionId)
       if (!ok) return@launch
@@ -438,6 +465,7 @@ class MainVm(
   fun refresh() {
     viewModelScope.launch {
       repo.refreshGlobal()
+      preloadProjects()
       val dir = ui.value.selectedProject
       if (dir != null) {
         repo.openDirectory(dir)
@@ -468,10 +496,26 @@ class MainVm(
     }
   }
 
-  fun openTerminal() {
-    val dir = ui.value.selectedProject ?: return
+  fun openTerminal(directory: String) {
+    val dir = directory.trim()
+    if (dir.isBlank()) return
     viewModelScope.launch {
+      if (ui.value.selectedProject != dir) {
+        activateProject(
+          directory = dir,
+          addManual = false,
+          resetPanels = false,
+          loadFiles = false,
+        )
+      }
       repo.terminalOpen(dir)
+    }
+  }
+
+  fun markSessionSeen(sessionId: String) {
+    if (sessionId.isBlank()) return
+    ui.update {
+      it.copy(sessionSeenAt = it.sessionSeenAt + (sessionId to System.currentTimeMillis()))
     }
   }
 
@@ -582,7 +626,10 @@ class MainVm(
       fileContent = null,
       fileLoading = false,
       changedFiles = emptyList(),
+      manualProjects = emptySet(),
+      projectQuery = "",
       projectSuggestions = emptyList(),
+      sessionSeenAt = emptyMap(),
     )
   }
 
@@ -600,6 +647,46 @@ class MainVm(
       fileLoading = false,
       changedFiles = emptyList(),
     )
+  }
+
+  private suspend fun activateProject(
+    directory: String,
+    addManual: Boolean,
+    resetPanels: Boolean,
+    loadFiles: Boolean,
+  ) {
+    val prev = ui.value.selectedProject
+    if (prev != null && prev != directory) repo.terminalClose(prev)
+    repo.openDirectory(directory)
+    ui.update {
+      val next = it.copy(
+        stage = AppStage.Projects,
+        selectedProject = directory,
+        manualProjects = if (addManual) it.manualProjects + directory else it.manualProjects,
+        projectSuggestions = emptyList(),
+      )
+      if (resetPanels) return@update resetSessionPanels(next)
+      next
+    }
+    if (loadFiles) {
+      loadRootFiles(directory)
+    }
+  }
+
+  private fun preloadProjects() {
+    if (!repo.state.value.connected) return
+    viewModelScope.launch {
+      val rs = repo.state.value
+      val dirs = (rs.sync.projects.map { it.worktree } + ui.value.manualProjects)
+        .asSequence()
+        .filter { it != "/" }
+        .distinct()
+        .filter { rs.sync.sessionsByDirectory[it] == null }
+        .toList()
+      dirs.map { dir ->
+        async(Dispatchers.IO) { repo.preloadDirectory(dir) }
+      }.awaitAll()
+    }
   }
 
   private fun isDirectory(item: FileNodeDto): Boolean {

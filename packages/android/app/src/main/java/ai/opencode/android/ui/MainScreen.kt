@@ -17,6 +17,7 @@ import ai.opencode.android.core.network.PromptAttachment
 import ai.opencode.android.ui.theme.LocalOpenCodeColors
 import ai.opencode.android.ui.theme.ThemeMode
 import android.content.Context
+import android.graphics.Color as AndroidColor
 import android.net.Uri
 import android.graphics.BitmapFactory
 import android.provider.OpenableColumns
@@ -24,8 +25,10 @@ import android.util.Base64
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts.OpenDocument
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -39,9 +42,11 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
@@ -84,6 +89,7 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilledTonalIconButton
+import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconButtonDefaults
@@ -108,6 +114,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
@@ -131,6 +138,8 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
+private const val OPENCODE_PROJECT_ID = "4b0ea68d7af9a6031a7ffda7ad66e0cb83315750"
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MainScreen(
@@ -145,10 +154,10 @@ fun MainScreen(
   onOpenProject: (String) -> Unit,
   onHideProject: (String) -> Unit,
   onUnhideProject: (String) -> Unit,
-  onCreateSession: () -> Unit,
-  onOpenSession: (String) -> Unit,
-  onDeleteSession: (String) -> Unit,
-  onArchiveSession: (String) -> Unit,
+  onCreateSession: (String) -> Unit,
+  onOpenSession: (String, String) -> Unit,
+  onDeleteSession: (String, String) -> Unit,
+  onArchiveSession: (String, String) -> Unit,
   onSendPrompt: (String, List<PromptAttachment>) -> Unit,
   onAbort: () -> Unit,
   onReplyPermission: (String, String) -> Unit,
@@ -158,7 +167,7 @@ fun MainScreen(
   onSelectAgent: (String?) -> Unit,
   onSelectVariant: (String?) -> Unit,
   onSelectSessionTab: (SessionTab) -> Unit,
-  onOpenTerminal: () -> Unit,
+  onOpenTerminal: (String) -> Unit,
   onRunTerminalCommand: (String) -> Unit,
   onSelectReviewScope: (ReviewScope) -> Unit,
   onSelectFilesMode: (FilesMode) -> Unit,
@@ -169,13 +178,15 @@ fun MainScreen(
   onRefresh: () -> Unit,
   onSetTheme: (String) -> Unit,
   onSetThemeMode: (ThemeMode) -> Unit,
+  onMarkSessionSeen: (String) -> Unit,
 ) {
   var serverInput by remember(state.serverInput) { mutableStateOf(state.serverInput) }
   var settingsOpen by rememberSaveable { mutableStateOf(false) }
   var showContextDetails by rememberSaveable { mutableStateOf(false) }
   var prompt by rememberSaveable { mutableStateOf("") }
   var sessionsProject by rememberSaveable { mutableStateOf<String?>(null) }
-  var projectTerminalOpen by rememberSaveable { mutableStateOf(false) }
+  var projectTerminalProject by rememberSaveable { mutableStateOf<String?>(null) }
+  var projectPathOpen by rememberSaveable { mutableStateOf(false) }
   var promptScrollTick by rememberSaveable { mutableStateOf(0) }
 
   val ui = LocalOpenCodeColors.current
@@ -198,6 +209,11 @@ fun MainScreen(
     if (directory == null || sessionId == null) return@remember false
     val type = state.repo.sync.sessionStatusByDirectory[directory]?.get(sessionId)?.type?.lowercase(Locale.getDefault())
     type == "busy" || type == "running" || type == "retry"
+  }
+
+  LaunchedEffect(state.stage, sessionId, messages.size) {
+    if (state.stage != AppStage.Session || sessionId == null) return@LaunchedEffect
+    onMarkSessionSeen(sessionId)
   }
 
   Scaffold(
@@ -251,6 +267,13 @@ fun MainScreen(
           }
         },
       )
+    },
+    floatingActionButton = {
+      if (state.stage == AppStage.Projects) {
+        FloatingActionButton(onClick = { projectPathOpen = true }) {
+          Icon(Icons.Rounded.FolderOpen, contentDescription = "Open project")
+        }
+      }
     },
     bottomBar = {
       if (state.stage == AppStage.Session && state.sessionTab == SessionTab.Chat && directory != null) {
@@ -315,22 +338,18 @@ fun MainScreen(
             projects = state.repo.sync.projects,
             hiddenProjects = state.hiddenProjects,
             manualProjects = state.manualProjects,
-            selected = state.selectedProject,
             sessionsByDirectory = state.repo.sync.sessionsByDirectory,
             statusByDirectory = state.repo.sync.sessionStatusByDirectory,
             permissionBySession = state.repo.sync.permissionBySession,
             questionBySession = state.repo.sync.questionBySession,
             activeSession = state.repo.activeSessionId,
-            query = state.projectQuery,
-            suggestions = state.projectSuggestions,
-            onQuery = onUpdateProjectQuery,
-            onOpenProject = onOpenProject,
+            sessionSeenAt = state.sessionSeenAt,
             onHideProject = onHideProject,
             onCreateSession = onCreateSession,
             onOpenSession = onOpenSession,
-            onOpenTerminal = {
-              onOpenTerminal()
-              projectTerminalOpen = true
+            onOpenTerminal = { project ->
+              onOpenTerminal(project)
+              projectTerminalProject = project
             },
             onShowAllSessions = { sessionsProject = it },
           )
@@ -372,7 +391,7 @@ fun MainScreen(
               onSelectTab = onSelectSessionTab,
               terminalConnected = state.repo.terminalConnected,
               terminalOutput = state.repo.terminalOutput,
-              onOpenTerminal = onOpenTerminal,
+              onOpenTerminal = { onOpenTerminal(directory) },
               onRunTerminalCommand = onRunTerminalCommand,
               onSelectReviewScope = onSelectReviewScope,
               onSelectFilesMode = onSelectFilesMode,
@@ -446,29 +465,44 @@ fun MainScreen(
       sessions = sessions,
       active = state.repo.activeSessionId,
       onOpen = {
-        onOpenSession(it)
+        onOpenSession(allSessionsFor, it)
         sessionsProject = null
       },
-      onDelete = onDeleteSession,
-      onArchive = onArchiveSession,
+      onDelete = { onDeleteSession(allSessionsFor, it) },
+      onArchive = { onArchiveSession(allSessionsFor, it) },
       onDismiss = { sessionsProject = null },
     )
   }
 
   LaunchedEffect(state.stage) {
     if (state.stage != AppStage.Projects) {
-      projectTerminalOpen = false
+      projectTerminalProject = null
+      projectPathOpen = false
     }
   }
 
-  if (projectTerminalOpen && state.stage == AppStage.Projects && directory != null) {
+  val projectTerminal = projectTerminalProject
+  if (projectTerminal != null && state.stage == AppStage.Projects) {
     ProjectTerminalSheet(
-      project = directory,
+      project = projectTerminal,
       connected = state.repo.terminalConnected,
       output = state.repo.terminalOutput,
-      onReconnect = onOpenTerminal,
+      onReconnect = { onOpenTerminal(projectTerminal) },
       onRunCommand = onRunTerminalCommand,
-      onDismiss = { projectTerminalOpen = false },
+      onDismiss = { projectTerminalProject = null },
+    )
+  }
+
+  if (projectPathOpen) {
+    ProjectPathSheet(
+      query = state.projectQuery,
+      suggestions = state.projectSuggestions,
+      onQuery = onUpdateProjectQuery,
+      onOpen = {
+        onOpenProject(it)
+        projectPathOpen = false
+      },
+      onDismiss = { projectPathOpen = false },
     )
   }
 }
@@ -623,31 +657,139 @@ private fun ServerScreen(
 }
 
 @Composable
+@OptIn(ExperimentalMaterial3Api::class)
+private fun ProjectPathSheet(
+  query: String,
+  suggestions: List<String>,
+  onQuery: (String) -> Unit,
+  onOpen: (String) -> Unit,
+  onDismiss: () -> Unit,
+) {
+  ModalBottomSheet(
+    onDismissRequest = onDismiss,
+    dragHandle = null,
+  ) {
+    Column(
+      modifier = Modifier
+        .fillMaxWidth()
+        .padding(horizontal = 12.dp, vertical = 10.dp)
+        .navigationBarsPadding(),
+      verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+      Text("Open existing directory", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+      OutlinedTextField(
+        value = query,
+        onValueChange = onQuery,
+        singleLine = true,
+        keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.None),
+        label = { Text("Path on server") },
+        modifier = Modifier.fillMaxWidth(),
+      )
+      Button(
+        onClick = {
+          val path = query.trim()
+          if (path.isBlank()) return@Button
+          onOpen(path)
+        },
+        enabled = query.isNotBlank(),
+      ) {
+        Text("Open")
+      }
+      if (suggestions.isNotEmpty()) {
+        Text("Suggestions", style = MaterialTheme.typography.labelMedium, color = LocalOpenCodeColors.current.textMuted)
+        Row(
+          modifier = Modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState()),
+          horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+          suggestions.take(20).forEach { path ->
+            AssistChip(onClick = { onOpen(path) }, label = { Text(path, maxLines = 1) })
+          }
+        }
+      }
+    }
+  }
+}
+
+@Composable
+private fun ProjectAvatar(project: ProjectDto?, worktree: String) {
+  val ui = LocalOpenCodeColors.current
+  val fallback = projectTitle(worktree).firstOrNull()?.uppercase() ?: "?"
+  val color = remember(project?.icon?.color) {
+    parseProjectColor(project?.icon?.color) ?: ui.element
+  }
+  val src = remember(project?.id, project?.icon?.override, project?.icon?.url) {
+    val pinned = if (project?.id == OPENCODE_PROJECT_ID) "https://opencode.ai/favicon.svg" else null
+    val icon = project?.icon?.override ?: project?.icon?.url
+    val value = pinned ?: icon
+    if (value.isNullOrBlank()) return@remember null
+    if (value.startsWith("http://") || value.startsWith("https://") || value.startsWith("data:image/")) return@remember value
+    null
+  }
+
+  Box(
+    modifier = Modifier
+      .size(34.dp)
+      .background(color = color, shape = CircleShape),
+    contentAlignment = Alignment.Center,
+  ) {
+    if (src != null) {
+      AsyncImage(
+        model = src,
+        contentDescription = null,
+        modifier = Modifier
+          .size(34.dp)
+          .clip(CircleShape)
+          .background(Color.Transparent, CircleShape),
+        contentScale = ContentScale.Crop,
+      )
+    } else {
+      Text(fallback, color = MaterialTheme.colorScheme.onPrimary, fontWeight = FontWeight.SemiBold)
+    }
+  }
+}
+
+private fun projectTitle(worktree: String): String {
+  val clean = worktree.trim().trimEnd('/', '\\')
+  if (clean.isBlank()) return worktree
+  val unix = clean.substringAfterLast('/', clean)
+  val win = unix.substringAfterLast('\\', unix)
+  if (win.isBlank()) return worktree
+  return win
+}
+
+private fun parseProjectColor(value: String?): Color? {
+  if (value.isNullOrBlank()) return null
+  return runCatching { Color(AndroidColor.parseColor(value)) }.getOrNull()
+}
+
+@Composable
 private fun ProjectScreen(
   projects: List<ProjectDto>,
   hiddenProjects: Set<String>,
   manualProjects: Set<String>,
-  selected: String?,
   sessionsByDirectory: Map<String, List<SessionDto>>,
   statusByDirectory: Map<String, Map<String, ai.opencode.android.core.model.SessionStatusDto>>,
   permissionBySession: Map<String, List<ai.opencode.android.core.model.PermissionRequestDto>>,
   questionBySession: Map<String, List<QuestionRequestDto>>,
   activeSession: String?,
-  query: String,
-  suggestions: List<String>,
-  onQuery: (String) -> Unit,
-  onOpenProject: (String) -> Unit,
+  sessionSeenAt: Map<String, Long>,
   onHideProject: (String) -> Unit,
-  onCreateSession: () -> Unit,
-  onOpenSession: (String) -> Unit,
-  onOpenTerminal: () -> Unit,
+  onCreateSession: (String) -> Unit,
+  onOpenSession: (String, String) -> Unit,
+  onOpenTerminal: (String) -> Unit,
   onShowAllSessions: (String) -> Unit,
 ) {
   val ui = LocalOpenCodeColors.current
-  val known = remember(projects) { projects.associateBy { it.worktree } }
+  val known = remember(projects) {
+    projects
+      .filterNot { it.id == "global" || it.worktree == "/" }
+      .associateBy { it.worktree }
+  }
   val entries = remember(known, manualProjects, hiddenProjects) {
     (known.keys + manualProjects)
-      .filterNot { it in hiddenProjects }
+      .filterNot { it in hiddenProjects || it == "/" }
       .sortedBy { it.lowercase(Locale.getDefault()) }
   }
 
@@ -655,56 +797,12 @@ private fun ProjectScreen(
     modifier = Modifier
       .fillMaxSize()
       .padding(horizontal = 14.dp, vertical = 10.dp),
-    verticalArrangement = Arrangement.spacedBy(12.dp),
+    verticalArrangement = Arrangement.spacedBy(10.dp),
   ) {
-    Card(
-      colors = CardDefaults.cardColors(containerColor = ui.panel),
-      border = BorderStroke(1.dp, ui.borderSubtle),
-    ) {
-      Column(
-        modifier = Modifier
-          .fillMaxWidth()
-          .padding(12.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
-      ) {
-        Text("Open project path", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-        OutlinedTextField(
-          value = query,
-          onValueChange = onQuery,
-          singleLine = true,
-          keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.None),
-          label = { Text("Path on server") },
-          modifier = Modifier.fillMaxWidth(),
-        )
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-          Button(onClick = { if (query.isNotBlank()) onOpenProject(query.trim()) }, enabled = query.isNotBlank()) {
-            Icon(Icons.Rounded.FolderOpen, contentDescription = null, modifier = Modifier.size(18.dp))
-            Spacer(Modifier.width(6.dp))
-            Text("Open")
-          }
-          if (suggestions.isNotEmpty()) {
-            Text("Suggestions", style = MaterialTheme.typography.labelSmall, color = ui.textMuted)
-          }
-        }
-        if (suggestions.isNotEmpty()) {
-          Row(
-            modifier = Modifier
-              .fillMaxWidth()
-              .horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-          ) {
-            suggestions.take(16).forEach { path ->
-              AssistChip(onClick = { onOpenProject(path) }, label = { Text(path, maxLines = 1) })
-            }
-          }
-        }
-      }
-    }
-
     if (entries.isEmpty()) {
       EmptyState(
         title = "No projects",
-        body = "Open a project path or connect to a server with known projects.",
+        body = "Use the folder button to open a project directory.",
       )
       return@Column
     }
@@ -717,26 +815,20 @@ private fun ProjectScreen(
         val project = known[worktree]
         val sessions = sessionsByDirectory[worktree].orEmpty().sortedByDescending { it.time.updated }
         val status = statusByDirectory[worktree].orEmpty()
-        val recent = sessions.firstOrNull()
-        val attention = sessions.filter { item ->
-          val needsPrompt = permissionBySession[item.id].orEmpty().isNotEmpty() || questionBySession[item.id].orEmpty().isNotEmpty()
-          val state = status[item.id]?.type
-          needsPrompt || state == "busy" || state == "retry"
-        }
 
         ProjectSection(
           worktree = worktree,
-          label = project?.name?.ifBlank { null } ?: project?.worktree ?: worktree,
-          selected = selected == worktree,
+          project = project,
           sessions = sessions,
-          attention = attention,
-          recent = recent,
+          statusBySession = status,
+          permissionBySession = permissionBySession,
+          questionBySession = questionBySession,
+          sessionSeenAt = sessionSeenAt,
           activeSession = activeSession,
-          onOpen = { onOpenProject(worktree) },
           onHide = { onHideProject(worktree) },
-          onCreateSession = onCreateSession,
-          onOpenSession = onOpenSession,
-          onOpenTerminal = onOpenTerminal,
+          onCreateSession = { onCreateSession(worktree) },
+          onOpenSession = { onOpenSession(worktree, it) },
+          onOpenTerminal = { onOpenTerminal(worktree) },
           onShowAll = { onShowAllSessions(worktree) },
         )
       }
@@ -745,15 +837,16 @@ private fun ProjectScreen(
 }
 
 @Composable
+@OptIn(ExperimentalFoundationApi::class)
 private fun ProjectSection(
   worktree: String,
-  label: String,
-  selected: Boolean,
+  project: ProjectDto?,
   sessions: List<SessionDto>,
-  attention: List<SessionDto>,
-  recent: SessionDto?,
+  statusBySession: Map<String, ai.opencode.android.core.model.SessionStatusDto>,
+  permissionBySession: Map<String, List<ai.opencode.android.core.model.PermissionRequestDto>>,
+  questionBySession: Map<String, List<QuestionRequestDto>>,
+  sessionSeenAt: Map<String, Long>,
   activeSession: String?,
-  onOpen: () -> Unit,
   onHide: () -> Unit,
   onCreateSession: () -> Unit,
   onOpenSession: (String) -> Unit,
@@ -771,7 +864,7 @@ private fun ProjectSection(
 
   Card(
     colors = CardDefaults.cardColors(containerColor = ui.panel),
-    border = BorderStroke(1.dp, if (selected) ui.borderActive else ui.borderSubtle),
+    border = BorderStroke(1.dp, ui.borderSubtle),
   ) {
     Column(
       modifier = Modifier
@@ -784,35 +877,35 @@ private fun ProjectSection(
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
       ) {
-        Column(modifier = Modifier.weight(1f)) {
-          Text(label, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.SemiBold)
-          Text(worktree, style = MaterialTheme.typography.labelSmall, color = ui.textMuted, maxLines = 1)
-        }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-          if (selected) {
-            AssistChip(onClick = {}, label = { Text("Open") })
+        Row(
+          modifier = Modifier.weight(1f),
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+          ProjectAvatar(project = project, worktree = worktree)
+          Column(modifier = Modifier.weight(1f)) {
+            Text(
+              projectTitle(worktree),
+              maxLines = 1,
+              overflow = TextOverflow.Clip,
+              fontWeight = FontWeight.SemiBold,
+              modifier = Modifier
+                .fillMaxWidth()
+                .basicMarquee(),
+            )
+            Text(
+              worktree,
+              style = MaterialTheme.typography.labelSmall,
+              color = ui.textMuted,
+              maxLines = 1,
+              overflow = TextOverflow.Clip,
+              modifier = Modifier
+                .fillMaxWidth()
+                .basicMarquee(),
+            )
           }
-          IconButton(onClick = onOpen) {
-            Icon(Icons.Rounded.ChevronRight, contentDescription = "Open project")
-          }
         }
-      }
-
-      Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-        Button(onClick = onOpen) {
-          Text(if (selected) "Refresh project" else "Enter")
-        }
-        OutlinedButton(onClick = onCreateSession, enabled = selected) {
-          Icon(Icons.Rounded.Add, contentDescription = null, modifier = Modifier.size(16.dp))
-          Spacer(Modifier.width(6.dp))
-          Text("New session")
-        }
-        OutlinedButton(onClick = onOpenTerminal, enabled = selected) {
-          Icon(Icons.Rounded.Code, contentDescription = null, modifier = Modifier.size(16.dp))
-          Spacer(Modifier.width(6.dp))
-          Text("Terminal")
-        }
-        OutlinedButton(onClick = {
+        IconButton(onClick = {
           if (confirmHide) {
             onHide()
             confirmHide = false
@@ -820,62 +913,95 @@ private fun ProjectSection(
             confirmHide = true
           }
         }) {
-          Icon(Icons.Rounded.Delete, contentDescription = null, modifier = Modifier.size(16.dp))
-          Spacer(Modifier.width(6.dp))
-          Text(if (confirmHide) "Confirm hide" else "Hide")
+          Icon(Icons.Rounded.Delete, contentDescription = if (confirmHide) "Confirm hide project" else "Hide project")
         }
       }
 
-      if (selected) {
-        if (recent != null) {
-          SessionShortcut(
-            label = "Most recent",
-            session = recent,
-            active = recent.id == activeSession,
-            onOpen = { onOpenSession(recent.id) },
-          )
+      if (confirmHide) {
+        Text("Tap hide again to confirm", style = MaterialTheme.typography.labelSmall, color = ui.warning)
+      }
+
+      Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+        Button(onClick = onCreateSession) {
+          Icon(Icons.Rounded.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+          Spacer(Modifier.width(6.dp))
+          Text("New session")
         }
-        if (attention.isNotEmpty()) {
-          Text("Needs attention", style = MaterialTheme.typography.labelMedium, color = ui.warning)
-          attention.take(4).forEach { item ->
-            SessionShortcut(
-              label = "Attention",
-              session = item,
-              active = item.id == activeSession,
-              warn = true,
-              onOpen = { onOpenSession(item.id) },
-            )
-          }
+        OutlinedButton(onClick = onOpenTerminal) {
+          Icon(Icons.Rounded.Code, contentDescription = null, modifier = Modifier.size(16.dp))
+          Spacer(Modifier.width(6.dp))
+          Text("Terminal")
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-          OutlinedButton(onClick = onShowAll, enabled = sessions.isNotEmpty()) {
-            Icon(Icons.Rounded.MoreVert, contentDescription = null, modifier = Modifier.size(16.dp))
-            Spacer(Modifier.width(6.dp))
-            Text("All sessions")
-          }
-          Text(
-            text = "${sessions.size} session${if (sessions.size == 1) "" else "s"}",
-            style = MaterialTheme.typography.labelSmall,
-            color = ui.textMuted,
-            modifier = Modifier.align(Alignment.CenterVertically),
-          )
+      }
+
+      val recentId = sessions.firstOrNull()?.id
+      val featured = sessions.filter { item ->
+        val signals = sessionSignals(
+          session = item,
+          status = statusBySession,
+          permissionBySession = permissionBySession,
+          questionBySession = questionBySession,
+          sessionSeenAt = sessionSeenAt,
+          activeSession = activeSession,
+        )
+        signals.busy || signals.needsAttention || signals.unread || item.id == recentId
+      }
+
+      if (featured.isEmpty()) {
+        Text("No recent session activity", style = MaterialTheme.typography.labelMedium, color = ui.textMuted)
+      }
+
+      featured.forEach { item ->
+        SessionShortcut(
+          session = item,
+          active = item.id == activeSession,
+          signals = sessionSignals(
+            session = item,
+            status = statusBySession,
+            permissionBySession = permissionBySession,
+            questionBySession = questionBySession,
+            sessionSeenAt = sessionSeenAt,
+            activeSession = activeSession,
+          ),
+          onOpen = { onOpenSession(item.id) },
+        )
+      }
+
+      Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        OutlinedButton(onClick = onShowAll) {
+          Icon(Icons.Rounded.MoreVert, contentDescription = null, modifier = Modifier.size(16.dp))
+          Spacer(Modifier.width(6.dp))
+          Text("All sessions")
         }
+        Text(
+          text = "Showing ${featured.size} of ${sessions.size}",
+          style = MaterialTheme.typography.labelSmall,
+          color = ui.textMuted,
+          modifier = Modifier.align(Alignment.CenterVertically),
+        )
       }
     }
   }
 }
 
 @Composable
+@OptIn(ExperimentalFoundationApi::class)
 private fun SessionShortcut(
-  label: String,
   session: SessionDto,
   active: Boolean,
-  warn: Boolean = false,
+  signals: SessionSignals,
   onOpen: () -> Unit,
 ) {
   val ui = LocalOpenCodeColors.current
   val title = session.title.ifBlank { session.slug }
-  val color = if (warn) ui.warning else ui.info
+  val status = buildList {
+    if (signals.permissionCount > 0) add("${signals.permissionCount} permission")
+    if (signals.questionCount > 0) add("${signals.questionCount} question")
+    if (signals.busy) add("Busy")
+    if (signals.unread) add("Unread")
+    if (isEmpty()) add("Idle")
+  }
+  val diff = session.summary
   Card(
     modifier = Modifier
       .fillMaxWidth()
@@ -890,21 +1016,78 @@ private fun SessionShortcut(
       verticalAlignment = Alignment.CenterVertically,
       horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-      Icon(
-        imageVector = if (warn) Icons.Rounded.WarningAmber else Icons.Rounded.Description,
-        contentDescription = null,
-        tint = color,
-        modifier = Modifier.size(16.dp),
-      )
+      if (signals.busy) {
+        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+      } else {
+        Icon(
+          imageVector = if (signals.needsAttention) Icons.Rounded.WarningAmber else Icons.Rounded.Description,
+          contentDescription = null,
+          tint = if (signals.needsAttention) ui.warning else if (signals.unread) ui.info else ui.textMuted,
+          modifier = Modifier.size(16.dp),
+        )
+      }
       Column(modifier = Modifier.weight(1f)) {
-        Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        Text(label, style = MaterialTheme.typography.labelSmall, color = ui.textMuted)
+        Text(
+          title,
+          maxLines = 1,
+          overflow = TextOverflow.Clip,
+          modifier = Modifier
+            .fillMaxWidth()
+            .basicMarquee(),
+        )
+        Text(status.joinToString(" · "), style = MaterialTheme.typography.labelSmall, color = ui.textMuted)
+      }
+      if (diff != null) {
+        Row(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
+          Text(
+            text = "+${diff.additions}",
+            style = MaterialTheme.typography.labelSmall,
+            color = ui.diffAdded,
+          )
+          Text(
+            text = "-${diff.deletions}",
+            style = MaterialTheme.typography.labelSmall,
+            color = ui.diffRemoved,
+          )
+        }
       }
       if (active) {
-        AssistChip(onClick = {}, label = { Text("Active") })
+        Text("Active", style = MaterialTheme.typography.labelSmall, color = ui.info)
       }
     }
   }
+}
+
+private data class SessionSignals(
+  val busy: Boolean,
+  val unread: Boolean,
+  val permissionCount: Int,
+  val questionCount: Int,
+) {
+  val needsAttention: Boolean
+    get() = permissionCount > 0 || questionCount > 0
+}
+
+private fun sessionSignals(
+  session: SessionDto,
+  status: Map<String, ai.opencode.android.core.model.SessionStatusDto>,
+  permissionBySession: Map<String, List<ai.opencode.android.core.model.PermissionRequestDto>>,
+  questionBySession: Map<String, List<QuestionRequestDto>>,
+  sessionSeenAt: Map<String, Long>,
+  activeSession: String?,
+): SessionSignals {
+  val state = status[session.id]?.type?.lowercase(Locale.getDefault())
+  val busy = state == "busy" || state == "running" || state == "retry"
+  val permissionCount = permissionBySession[session.id].orEmpty().size
+  val questionCount = questionBySession[session.id].orEmpty().size
+  val seenAt = sessionSeenAt[session.id] ?: 0L
+  val unread = session.id != activeSession && session.time.updated > seenAt
+  return SessionSignals(
+    busy = busy,
+    unread = unread,
+    permissionCount = permissionCount,
+    questionCount = questionCount,
+  )
 }
 
 @Composable
@@ -994,6 +1177,7 @@ private fun SessionScreen(
           output = terminalOutput,
           onReconnect = onOpenTerminal,
           onRunCommand = onRunTerminalCommand,
+          modifier = Modifier.fillMaxSize(),
         )
       }
 
@@ -1793,22 +1977,21 @@ private fun ProjectTerminalSheet(
     onDismissRequest = onDismiss,
     dragHandle = null,
   ) {
-    Column(
+    TerminalPanel(
+      title = "Project terminal",
+      subtitle = project,
+      connected = connected,
+      output = output,
+      onReconnect = onReconnect,
+      onRunCommand = onRunCommand,
       modifier = Modifier
         .fillMaxWidth()
+        .fillMaxHeight(0.92f)
         .padding(horizontal = 12.dp, vertical = 10.dp)
-        .navigationBarsPadding(),
-      verticalArrangement = Arrangement.spacedBy(10.dp),
-    ) {
-      TerminalPanel(
-        title = "Project terminal",
-        subtitle = project,
-        connected = connected,
-        output = output,
-        onReconnect = onReconnect,
-        onRunCommand = onRunCommand,
-      )
-    }
+        .statusBarsPadding()
+        .navigationBarsPadding()
+        .imePadding(),
+    )
   }
 }
 
@@ -1820,6 +2003,7 @@ private fun TerminalPanel(
   output: String,
   onReconnect: () -> Unit,
   onRunCommand: (String) -> Unit,
+  modifier: Modifier = Modifier,
 ) {
   val ui = LocalOpenCodeColors.current
   var command by rememberSaveable(subtitle) { mutableStateOf("") }
@@ -1832,7 +2016,7 @@ private fun TerminalPanel(
   Card(
     colors = CardDefaults.cardColors(containerColor = ui.panel),
     border = BorderStroke(1.dp, ui.borderSubtle),
-    modifier = Modifier.fillMaxSize(),
+    modifier = modifier,
   ) {
     Column(
       modifier = Modifier

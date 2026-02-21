@@ -222,6 +222,29 @@ class OpenCodeRepository(
     }
   }
 
+  suspend fun preloadDirectory(directory: String) {
+    val url = internal.value.activeServer ?: return
+    val api = apiFactory.scoped(url, directory)
+
+    runCatching {
+      val status = scope.async(Dispatchers.IO) { api.sessionStatus() }
+      val sessions = scope.async(Dispatchers.IO) { api.sessionList() }
+      val permissions = scope.async(Dispatchers.IO) { api.permissionList() }
+      val questions = scope.async(Dispatchers.IO) { api.questionList() }
+
+      internal.update { cur ->
+        cur.copy(
+          sync = cur.sync.copy(
+            sessionsByDirectory = cur.sync.sessionsByDirectory + (directory to sessions.await()),
+            sessionStatusByDirectory = cur.sync.sessionStatusByDirectory + (directory to status.await()),
+            permissionBySession = cur.sync.permissionBySession + permissions.await().groupBy { it.sessionID },
+            questionBySession = cur.sync.questionBySession + questions.await().groupBy { it.sessionID },
+          ),
+        )
+      }
+    }
+  }
+
   suspend fun openSession(directory: String, sessionId: String) {
     val url = internal.value.activeServer ?: return
     val api = apiFactory.scoped(url, directory)
